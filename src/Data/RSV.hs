@@ -20,7 +20,6 @@ import Data.ByteString.Builder
 import Data.String
 import Data.Text as T
 
-import Control.Exception
 import qualified Data.List as L
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
