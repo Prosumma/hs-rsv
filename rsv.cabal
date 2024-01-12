@@ -18,6 +18,7 @@ build-type:     Simple
 extra-source-files:
     README.md
     CHANGELOG.md
+    CODE_OF_CONDUCT.md
 
 source-repository head
   type: git

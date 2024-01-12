@@ -9,6 +9,7 @@ copyright:           "2024 Gregory Higley"
 extra-source-files:
 - README.md
 - CHANGELOG.md
+- CODE_OF_CONDUCT.md
 
 # Metadata used when publishing your package
 # synopsis:            Short description of your package
