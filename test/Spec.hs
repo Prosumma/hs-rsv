@@ -18,8 +18,8 @@ instance FromRSVRow Person where
 
 main :: IO ()
 main = hspec $ do 
-  describe "parseBytes" $ do
-    it "works" $ do
+  describe "decode" $ do
+    it "decodes" $ do
       let b = LB.pack [0x71, valueTerminatorChar, nullChar, valueTerminatorChar, 0x79, valueTerminatorChar, rowTerminatorChar]
       let e = decode b 
       let expected :: [[Maybe Text]] = [[Just "q", Nothing, Just "y"]]
