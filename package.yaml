@@ -22,7 +22,9 @@ description:         Please see the README on GitHub at <https://github.com/pros
 
 dependencies:
 - base >= 4.7 && < 5
+- base64-bytestring
 - bytestring
+- mtl
 - text
 
 ghc-options:
@@ -33,6 +35,7 @@ ghc-options:
 - -Wincomplete-uni-patterns
 - -Wmissing-export-lists
 - -Wmissing-home-modules
+- -Wno-name-shadowing
 - -Wpartial-fields
 - -Wredundant-constraints
 

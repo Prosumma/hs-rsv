@@ -1,36 +1,35 @@
-{-# LANGUAGE OverloadedStrings, RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
-import Data.ByteString.Builder
+import Data.ByteString.Lazy as LB
 import Data.RSV
 import Data.Text
-import Data.Vector as V
 import Test.Hspec
 
 data Person = Person {
   name :: !Text,
   age  :: !(Maybe Int)
-}
+} deriving (Eq, Show)
 
-instance Row Person where
-  values Person{..} = [encodeUtf8 name, encodeUtf8 age]
+instance ToRSVRow Person where
+  toRSVRow Person{..} = encodeRow $ toRSV name <> toRSV age
+
+instance FromRSVRow Person where
+  fromRSVRow = decodeRow $ Person <$> fromRSV <*> fromRSV
 
 main :: IO ()
 main = hspec $ do 
+  describe "parseBytes" $ do
+    it "works" $ do
+      let b = LB.pack [0x71, valueTerminatorChar, nullChar, valueTerminatorChar, 0x79, valueTerminatorChar, rowTerminatorChar]
+      let e = decode b 
+      let expected :: [[Maybe Text]] = [[Just "q", Nothing, Just "y"]]
+      case e of
+        Left e -> expectationFailure (show e) 
+        Right a -> a `shouldBe` expected
   describe "encode" $ do
-    it "properly encodes a list of lists of Ints" $ do
-      let expected = toLazyByteString $
-            stringUtf8 (show (3 :: Int)) <> valueTerminator <>
-            stringUtf8 (show (4 :: Int)) <> valueTerminator <>
-            stringUtf8 (show (5 :: Int)) <> valueTerminator <>
-            rowTerminator
-      let numbers = [[3, 4, 5]] :: [[Int]]
-      let encoded = encode numbers 
-      encoded `shouldBe` expected
-    it "properly encodes a Foldable of any type which implements Row" $ do
-      let expected = toLazyByteString $
-            stringUtf8 "Morrissey" <> valueTerminator <>
-            nullValue <> valueTerminator <>
-            rowTerminator
-      let person = Person "Morrissey" Nothing
-      let encoded = encode $ V.singleton person 
-      encoded `shouldBe` expected
+    it "encodes" $ do
+      let persons = [Person "Rose" Nothing, Person "Greg" (Just 2)]
+      let e = encode persons
+      case decode e of
+        Left e -> expectationFailure (show e) 
+        Right a -> a `shouldBe` persons
