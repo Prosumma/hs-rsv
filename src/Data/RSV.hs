@@ -151,9 +151,7 @@ decodeRead = decodeString >>= throwIfNothing . readMaybe
 permitNull :: RSVParser a -> RSVParser (Maybe a)
 permitNull parser = catchError (Just <$> parser) handler
   where
-    handler UnpermittedNull = do 
-      modify $ Prelude.drop 2
-      return Nothing
+    handler UnpermittedNull = modify (Prelude.drop 2) >> return Nothing 
     handler e = throwError e
 
 class FromRSV a where
