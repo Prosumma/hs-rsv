@@ -16,6 +16,13 @@ instance ToRSVRow Person where
 instance FromRSVRow Person where
   fromRSVRow = decodeRow $ Person <$> fromRSV <*> fromRSV
 
+infix 1 `shouldBeRSV`
+
+shouldBeRSV :: (Eq a, Show a) => Either DecodeException a -> a -> Expectation
+shouldBeRSV a b = case a of
+  Left e -> expectationFailure (show e)
+  Right a -> a `shouldBe` b 
+
 main :: IO ()
 main = hspec $ do 
   describe "decode" $ do
@@ -23,13 +30,13 @@ main = hspec $ do
       let b = LB.pack [0x71, valueTerminatorChar, nullChar, valueTerminatorChar, 0x79, valueTerminatorChar, rowTerminatorChar]
       let e = decode b 
       let expected :: [[Maybe Text]] = [[Just "q", Nothing, Just "y"]]
-      case e of
-        Left e -> expectationFailure (show e) 
-        Right a -> a `shouldBe` expected
+      e `shouldBeRSV` expected
   describe "encode" $ do
     it "encodes" $ do
       let persons = [Person "Rose" Nothing, Person "Greg" (Just 2)]
       let e = encode persons
-      case decode e of
-        Left e -> expectationFailure (show e) 
-        Right a -> a `shouldBe` persons
+      decode e `shouldBeRSV` persons
+    it "properly encodes any Foldable as a row when the elements are ToRSV" $ do
+      let texts :: [[Maybe Text]] = [[Just "Mises", Just "Rothbard"]] 
+      let e = encode texts
+      decode e `shouldBeRSV` texts

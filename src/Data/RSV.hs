@@ -38,6 +38,8 @@ import Data.Word
 import Text.Read
 
 import qualified Data.ByteString as SB
+import qualified Data.ByteString.Base64 as B64
+import qualified Data.ByteString.Base64.Lazy as B64L
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 
@@ -81,6 +83,12 @@ encodeShow = encodeStringUnsafe . show
 encodeText :: Text -> RSVBuilder
 encodeText = encodeStringUnsafe . T.unpack
 
+encodeBinary :: SB.ByteString -> RSVBuilder
+encodeBinary = RSVBuilder . (<> valueTerminator) . byteString . B64.encode
+
+encodeBinaryLazy :: ByteString -> RSVBuilder
+encodeBinaryLazy = RSVBuilder . (<> valueTerminator) . lazyByteString . B64L.encode
+
 class ToRSV a where
   toRSV :: a -> RSVBuilder
 
@@ -89,6 +97,12 @@ instance ToRSV String where
 
 instance ToRSV Text where
   toRSV = encodeText
+
+instance ToRSV SB.ByteString where
+  toRSV = encodeBinary 
+
+instance ToRSV ByteString where
+  toRSV = encodeBinaryLazy 
 
 instance ToRSV Int where
   toRSV = encodeShow
@@ -102,6 +116,9 @@ encodeRow builder = builder <> RSVBuilder rowTerminator
 
 class ToRSVRow a where
   toRSVRow :: a -> RSVBuilder
+
+instance (Foldable t, ToRSV a) => ToRSVRow (t a) where
+  toRSVRow = encodeRow . foldMap toRSV 
 
 encode :: (Foldable t, ToRSVRow a) => t a -> ByteString
 encode = toLazyByteString . builder . foldMap toRSVRow
@@ -141,6 +158,12 @@ decodeText = decodeValue (first UnicodeException . TE.decodeUtf8')
 decodeString :: RSVParser String 
 decodeString = T.unpack <$> decodeText
 
+decodeBinary :: RSVParser SB.ByteString
+decodeBinary = decodeValue $ first (const InvalidFormat) . B64.decode
+
+decodeBinaryLazy :: RSVParser ByteString
+decodeBinaryLazy = fromStrict <$> decodeBinary 
+
 decodeRead :: Read a => RSVParser a 
 decodeRead = decodeString >>= throwIfNothing . readMaybe
   where
@@ -162,6 +185,12 @@ instance FromRSV String where
 
 instance FromRSV Text where
   fromRSV = decodeText
+
+instance FromRSV SB.ByteString where
+  fromRSV = decodeBinary
+
+instance FromRSV ByteString where
+  fromRSV = decodeBinaryLazy
 
 instance FromRSV Int where
   fromRSV = decodeRead
