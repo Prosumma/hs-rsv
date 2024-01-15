@@ -5,6 +5,7 @@ module Data.RSV (
   atRowTerminator,
   decode,
   decodeList,
+  decodeList',
   decodeRow,
   decodeString,
   decodeText,
@@ -35,6 +36,7 @@ import Data.ByteString.Lazy as LB
 import Data.String
 import Data.Text as T
 import Data.Word
+import GHC.IsList
 import Text.Read
 
 import qualified Data.ByteString as SB
@@ -174,6 +176,8 @@ decodeRead = decodeString >>= throwIfNothing . readMaybe
 permitNull :: RSVParser a -> RSVParser (Maybe a)
 permitNull parser = catchError (Just <$> parser) handler
   where
+    -- We need `drop 2` because `catchError` resets the state to what it was right
+    -- before the parser is executed.
     handler UnpermittedNull = modify (Prelude.drop 2) >> return Nothing 
     handler e = throwError e
 
@@ -220,15 +224,18 @@ assertRowTerminator = State.get >>= checkTerminator
 decodeRow :: RSVParser a -> RSVParser a
 decodeRow parser = parser <* assertRowTerminator
 
-decodeList :: FromRSV a => RSVParser [a]
-decodeList = do
+decodeList' :: FromRSV a => RSVParser [a]
+decodeList' = do
   terminated <- atRowTerminator
   if terminated 
     then modify (Prelude.drop 1) >> return []
     else liftA2 (:) fromRSV decodeList 
 
+decodeList :: (FromRSV (Item l), IsList l) => RSVParser l
+decodeList = fromList <$> decodeList'
+
 instance FromRSV a => FromRSVRow [a] where 
-  fromRSVRow = decodeList
+  fromRSVRow = decodeList'
 
 decode :: FromRSVRow a => ByteString -> Either DecodeException [a]
 decode = evalStateT decode' . LB.unpack
