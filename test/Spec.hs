@@ -4,6 +4,7 @@ import Data.ByteString.Lazy as LB
 import Data.RSV
 import Data.Text
 import Test.Hspec
+import Spec2
 
 data Person = Person {
   name :: !Text,
@@ -25,6 +26,7 @@ shouldBeRSV a b = case a of
 
 main :: IO ()
 main = hspec $ do 
+  rsv2
   describe "decode" $ do
     it "decodes" $ do
       let b = LB.pack [0x71, valueTerminatorChar, nullChar, valueTerminatorChar, 0x79, valueTerminatorChar, rowTerminatorChar]

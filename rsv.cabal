@@ -27,6 +27,7 @@ source-repository head
 library
   exposed-modules:
       Data.RSV
+      Data.RSV2
   other-modules:
       Paths_rsv
   hs-source-dirs:
@@ -60,6 +61,7 @@ test-suite rsv-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Spec2
       Paths_rsv
   hs-source-dirs:
       test
