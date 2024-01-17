@@ -1,64 +1,86 @@
-{-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables, TupleSections #-}
 
-import Data.ByteString.Lazy as LB
-import Data.RSV
-import Data.Text
+import Control.Monad.State
+import Data.ByteString.Lazy as LB hiding (drop)
+import Data.RSV 
+import Data.Text hiding (drop)
 import Test.Hspec
-import Spec2
-
-data Person = Person {
-  name :: !Text,
-  age  :: !(Maybe Int)
-} deriving (Eq, Show)
-
-instance ToRSVRow Person where
-  toRSVRow Person{..} = encodeRow $ toRSV name <> toRSV age
-
-instance FromRSVRow Person where
-  fromRSVRow = decodeRow $ Person <$> fromRSV <*> fromRSV
-
-infix 1 `shouldBeRSV`
-
-shouldBeRSV :: (Eq a, Show a) => Either DecodeException a -> a -> Expectation
-shouldBeRSV a b = case a of
-  Left e -> expectationFailure (show e)
-  Right a -> a `shouldBe` b 
 
 main :: IO ()
-main = hspec $ do 
-  rsv2
-  describe "decode" $ do
-    it "decodes" $ do
-      let b = LB.pack [0x71, valueTerminatorChar, nullChar, valueTerminatorChar, 0x79, valueTerminatorChar, rowTerminatorChar]
-      let e = decode b 
-      let expected :: [[Maybe Text]] = [[Just "q", Nothing, Just "y"]]
-      e `shouldBeRSV` expected
-    it "fails when a null is encountered without a following row terminator" $ do
-      let b = LB.pack [0x71, valueTerminatorChar, nullChar, 0x79, valueTerminatorChar, rowTerminatorChar]
-      case decode b :: Either DecodeException [[Maybe Text]] of
-        Left UnexpectedNull -> return ()  
-        _ -> expectationFailure "Expected to throw UnexpectedNull."
-    it "fails when a null is encountered after UTF-8 bytes" $ do
-      let b = LB.pack [0x71, valueTerminatorChar, 0x79, nullChar, valueTerminatorChar, rowTerminatorChar]
-      case decode b :: Either DecodeException [[Maybe Text]] of
-        Left UnexpectedNull -> return ()  
-        _ -> expectationFailure "Expected to throw UnexpectedNull."
-    it "fails when a row terminator is encountered without a preceding value terminator" $ do
-      let b = LB.pack [0x71, valueTerminatorChar, 0x79, rowTerminatorChar]
-      case decode b :: Either DecodeException [[Maybe Text]] of
-        Left UnexpectedRowTerminator -> return ()  
-        _ -> expectationFailure "Expected to throw UnexpectedNull."
-    it "fails when EOF is encountered without a fully-processed row" $ do
-      let b = LB.pack [0x71, valueTerminatorChar, 0x79]
-      case decode b :: Either DecodeException [[Maybe Text]] of
-        Left UnexpectedEOF -> return ()  
-        _ -> expectationFailure "Expected to throw UnexpectedNull."
-  describe "encode" $ do
-    it "encodes" $ do
-      let persons = [Person "Rose" Nothing, Person "Greg" (Just 2)]
-      let e = encode persons
-      decode e `shouldBeRSV` persons
-    it "properly encodes any Foldable as a row when the elements are ToRSV" $ do
-      let texts :: [[Maybe Text]] = [[Just "Mises", Just "Rothbard"]] 
-      let e = encode texts
-      decode e `shouldBeRSV` texts
+main = hspec rsv2
+
+rsv2 :: Spec
+rsv2 = do
+  describe "parseByteString" $ do 
+    it "does cool things" $ do
+      let bytes = [0x79, valueTerminatorChar, rowTerminatorChar]
+      case parseByteString (0, bytes) of
+        Left _ -> expectationFailure "This should have succeeded"
+        Right ((p, _), b) -> do
+          p `shouldBe` 2
+          b `shouldBe` Just "y"
+    it "processes nulls properly" $ do
+      let bytes = [nullChar, valueTerminatorChar, 0x79, valueTerminatorChar]
+      case parseByteString (0, bytes) of
+        Left _ -> expectationFailure "This should have succeeded"
+        Right ((p, ws), b) -> do
+          p `shouldBe` 2
+          ws `shouldBe` drop 2 bytes
+          b `shouldBe` Nothing
+    it "fails when null is misused" $ do
+      let bytes = [nullChar, 0x79, valueTerminatorChar, 0x79, valueTerminatorChar]
+      case parseByteString (0, bytes) of
+        Left (p, UnexpectedNull) -> p `shouldBe` 0 
+        Left e -> expectationFailure (show e)
+        _ -> expectationFailure "should have failed with UnpermittedNull"
+  describe "parseValue" $ do
+    it "throws UnpermittedNull on null" $ do
+      let bytes = [nullChar, valueTerminatorChar]
+      case evalStateT parseValue (0, bytes) of
+        Left (p, UnpermittedNull) -> do
+          p `shouldBe` 0
+        Left e -> expectationFailure $ "Expected unpermitted null, but got " <> show e
+        Right _ -> expectationFailure "Expected evaluation to fail, but it suceeded."
+  describe "permitNull" $ do
+    it "permits a null" $ do
+      let bytes = [nullChar, valueTerminatorChar]
+      case evalStateT (permitNull parseValue) (0, bytes) of
+        Left e -> expectationFailure (show e)
+        Right p -> p `shouldBe` Nothing 
+    it "advances the state properly" $ do
+      let bytes = [nullChar, valueTerminatorChar]
+      case execStateT (permitNull parseValue) (0, bytes) of
+        Left e -> expectationFailure (show e)
+        Right s -> s `shouldBe` (2, [])
+  describe "parseRead" $ do
+    it "reads an Int and properly advances the state" $ do
+      let bytes = [0x31, 0x32, valueTerminatorChar]
+      case runStateT parseRead (0, bytes) of
+        Left e -> expectationFailure (show e)
+        Right (n, s) -> do
+          n `shouldBe` (12 :: Int)
+          s `shouldBe` (3, [])
+    it "properly rewinds the state in the case of InvalidFormat" $ do
+      let bytes = [0x31, 0x79, valueTerminatorChar]
+      case runStateT (parseRead :: RSVParser Int) (0, bytes) of
+        Left (p, InvalidFormat) -> p `shouldBe` 0 
+        _ -> expectationFailure "Expected to fail, but it succeeded." 
+  describe "parseList" $ do
+    it "parses a list" $ do
+      let input :: [[Text]] = [["encode", "this"], ["then", "decode"]]
+      let encoded = encode input
+      let bytes = LB.unpack encoded
+      let dl = parseList :: RSVParser [Text]
+      case runStateT dl (0, bytes) of
+        Left e -> expectationFailure (show e)
+        Right (a, (p, _)) -> do
+          a `shouldBe` ["encode", "this"] 
+          p `shouldBe` 13
+          bytes !! 13 `shouldBe` 0x74 
+  describe "encode and parse" $ do
+    it "roundtrips" $ do
+      let input :: [[Text]] = [["encode", "this"], ["then", "decode"]]
+      let encoded = encode input
+      case parse encoded of
+        Left e -> expectationFailure (show e)
+        Right a -> a `shouldBe` input
