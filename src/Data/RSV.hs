@@ -2,20 +2,25 @@
 
 module Data.RSV (
   assertRowTerminator,
-  parse,
-  parseList,
-  parseRow,
   encode,
   encodeNull,
   encodeShow,
   encodeStringUnsafe,
   encodeText,
+  encodeRow,
   nullChar,
+  parse,
+  parse',
+  parseBinary,
+  parseBinaryLazy,
   parseByteString,
+  parseList,
   parseRead,
+  parseRow,
   parseValue,
   permitNull,
   rowTerminatorChar,
+  throwRSVException,
   tryParse,
   valueTerminatorChar,
   Builder,
@@ -25,6 +30,8 @@ module Data.RSV (
   RSVException(..),
   RSVParser,
   RSVParseState,
+  ToRSV(..),
+  ToRSVRow(..)
 ) where
 
 import Control.Exception
@@ -40,6 +47,8 @@ import GHC.IsList
 import Text.Read hiding (get, lift)
 
 import qualified Data.ByteString as SB 
+import qualified Data.ByteString.Base64 as B64
+import qualified Data.ByteString.Base64.Lazy as B64L
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Encoding.Error as TEE
 
@@ -142,6 +151,12 @@ parseRead = tryParse $ do
     Just a -> return a
     Nothing -> throwRSVException InvalidFormat
 
+parseBinary :: RSVParser SB.ByteString
+parseBinary = tryParse $ parseValue >>= convertValue (first (const InvalidFormat) . B64.decode)
+
+parseBinaryLazy :: RSVParser ByteString
+parseBinaryLazy = fromStrict <$> parseBinary
+
 permitNull :: RSVParser a -> RSVParser (Maybe a)
 permitNull parser = catchError (Just <$> parser) handler
   where
@@ -161,6 +176,12 @@ instance FromRSV String where
 
 instance FromRSV Int where
   fromRSV = parseRead
+
+instance FromRSV SB.ByteString where
+  fromRSV = parseBinary
+
+instance FromRSV ByteString where
+  fromRSV = parseBinaryLazy
 
 instance FromRSV a => FromRSV (Maybe a) where
   fromRSV = permitNull fromRSV
@@ -184,14 +205,15 @@ parseList = fromList <$> parseList'
 instance FromRSV a => FromRSVRow [a] where 
   fromRSVRow = parseList'
 
+parse' :: FromRSVRow a => RSVParser [a]
+parse' = do
+  end <- gets $ Prelude.null . snd
+  if end 
+    then return []
+    else liftA2 (:) fromRSVRow parse'
+
 parse :: FromRSVRow a => ByteString -> Either RSVError [a]
 parse = evalStateT parse' . (0,) . LB.unpack
-  where
-    parse' = do
-      end <- gets $ Prelude.null . snd
-      if end 
-        then return []
-        else liftA2 (:) fromRSVRow parse'
 
 valueTerminator, nullValue, rowTerminator :: Builder
 valueTerminator = word8 valueTerminatorChar
@@ -214,6 +236,12 @@ encodeShow = encodeStringUnsafe . show
 encodeText :: Text -> Builder
 encodeText = encodeStringUnsafe . T.unpack
 
+encodeBinary :: SB.ByteString -> Builder
+encodeBinary = byteString . B64.encode
+
+encodeBinaryLazy :: ByteString -> Builder
+encodeBinaryLazy = lazyByteString . B64L.encode
+
 class ToRSV a where
   toRSV :: a -> Builder
 
@@ -225,6 +253,12 @@ instance ToRSV Text where
 
 instance ToRSV Int where
   toRSV = encodeShow
+
+instance ToRSV SB.ByteString where
+  toRSV = encodeBinary
+
+instance ToRSV ByteString where
+  toRSV = encodeBinaryLazy
 
 instance ToRSV a => ToRSV (Maybe a) where
   toRSV Nothing = encodeNull
@@ -238,6 +272,10 @@ class ToRSVRow a where
 
 instance (Foldable t, ToRSV a) => ToRSVRow (t a) where
   toRSVRow = encodeRow . foldMap toRSV
+
+instance ToRSVRow a => ToRSVRow (Maybe a) where
+  toRSVRow Nothing = mempty
+  toRSVRow (Just a) = toRSVRow a
 
 encode :: (Foldable t, ToRSVRow a) => t a -> ByteString
 encode = toLazyByteString . foldMap toRSVRow
