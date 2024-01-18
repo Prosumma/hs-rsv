@@ -16,7 +16,6 @@ module Data.RSV (
   parse',
   parseBinary,
   parseBinaryLazy,
-  parseByteString,
   parseList,
   parseRead,
   parseRow,

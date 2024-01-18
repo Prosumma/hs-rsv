@@ -28,28 +28,6 @@ instance FromRSVRow PersonOrName where
 
 main :: IO ()
 main = hspec $ do
-  describe "parseByteString" $ do
-    it "does cool things" $ do
-      let bytes = [0x79, valueTerminatorChar, rowTerminatorChar]
-      case parseByteString (0, bytes) of
-        Left _ -> expectationFailure "This should have succeeded"
-        Right ((p, _), b) -> do
-          p `shouldBe` 2
-          b `shouldBe` Just "y"
-    it "processes nulls properly" $ do
-      let bytes = [nullChar, valueTerminatorChar, 0x79, valueTerminatorChar]
-      case parseByteString (0, bytes) of
-        Left _ -> expectationFailure "This should have succeeded"
-        Right ((p, ws), b) -> do
-          p `shouldBe` 2
-          ws `shouldBe` drop 2 bytes
-          b `shouldBe` Nothing
-    it "fails when null is misused" $ do
-      let bytes = [nullChar, 0x79, valueTerminatorChar, 0x79, valueTerminatorChar]
-      case parseByteString (0, bytes) of
-        Left (p, UnexpectedNull) -> p `shouldBe` 0
-        Left e -> expectationFailure (show e)
-        _ -> expectationFailure "should have failed with UnpermittedNull"
   describe "parseValue" $ do
     it "throws UnpermittedNull on null" $ do
       let bytes = [nullChar, valueTerminatorChar]
