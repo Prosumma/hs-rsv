@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
+import Control.Applicative
 import Control.Monad.State
 import Data.ByteString.Lazy as LB hiding (drop)
 import Data.RSV
@@ -25,15 +26,7 @@ instance ToRSVRow PersonOrName where
   toRSVRow (NameOnly name) = toRSVRow [name]
 
 instance FromRSVRow PersonOrName where
-  fromRSVRow = do
-    list <- parseList
-    case list of
-      [Just name] -> return $ NameOnly name
-      [Just name, Just num] -> case readMaybe (T.unpack num) of
-        Nothing -> throwRSVException InvalidFormat 
-        num -> return $ PersonOnly $ Person name num
-      [Just name, Nothing] -> return $ PersonOnly $ Person name Nothing
-      _ -> throwRSVException InvalidFormat
+  fromRSVRow = (PersonOnly <$> fromRSVRow) <|> parseRow (NameOnly <$> fromRSV)
 
 main :: IO ()
 main = hspec $ do
@@ -62,7 +55,7 @@ main = hspec $ do
   describe "parseValue" $ do
     it "throws UnpermittedNull on null" $ do
       let bytes = [nullChar, valueTerminatorChar]
-      case evalStateT parseValue (0, bytes) of
+      case evalRSVParser (0, bytes) parseValue of
         Left (p, UnpermittedNull) -> do
           p `shouldBe` 0
         Left e -> expectationFailure $ "Expected unpermitted null, but got " <> show e
@@ -70,25 +63,25 @@ main = hspec $ do
   describe "permitNull" $ do
     it "permits a null" $ do
       let bytes = [nullChar, valueTerminatorChar]
-      case evalStateT (permitNull parseValue) (0, bytes) of
+      case evalRSVParser (0, bytes) (permitNull parseValue) of
         Left e -> expectationFailure (show e)
         Right p -> p `shouldBe` Nothing
     it "advances the state properly" $ do
       let bytes = [nullChar, valueTerminatorChar]
-      case execStateT (permitNull parseValue) (0, bytes) of
+      case execRSVParser (0, bytes) (permitNull parseValue) of
         Left e -> expectationFailure (show e)
         Right s -> s `shouldBe` (2, [])
   describe "parseRead" $ do
     it "reads an Int and properly advances the state" $ do
       let bytes = [0x31, 0x32, valueTerminatorChar]
-      case runStateT parseRead (0, bytes) of
+      case runRSVParser (0, bytes) parseRead of
         Left e -> expectationFailure (show e)
         Right (n, s) -> do
           n `shouldBe` (12 :: Int)
           s `shouldBe` (3, [])
     it "properly rewinds the state in the case of InvalidFormat" $ do
       let bytes = [0x31, 0x79, valueTerminatorChar]
-      case runStateT (parseRead :: RSVParser Int) (0, bytes) of
+      case runRSVParser (0, bytes) (parseRead :: RSVParser Int) of
         Left (p, InvalidFormat) -> p `shouldBe` 0
         _ -> expectationFailure "Expected to fail, but it succeeded."
   describe "parseList" $ do
@@ -97,7 +90,7 @@ main = hspec $ do
       let encoded = encode input
       let bytes = LB.unpack encoded
       let dl = parseList :: RSVParser [Text]
-      case runStateT dl (0, bytes) of
+      case runRSVParser (0, bytes) dl of
         Left e -> expectationFailure (show e)
         Right (a, (p, _)) -> do
           a `shouldBe` ["encode", "this"]

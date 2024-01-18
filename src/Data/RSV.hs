@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, FlexibleInstances, TupleSections #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, TupleSections #-}
 
 module Data.RSV (
   assertRowTerminator,
@@ -8,6 +8,9 @@ module Data.RSV (
   encodeStringUnsafe,
   encodeText,
   encodeRow,
+  evalRSVParser,
+  execRSVParser,
+  lift,
   nullChar,
   parse,
   parse',
@@ -19,6 +22,7 @@ module Data.RSV (
   parseRow,
   parseValue,
   permitNull,
+  runRSVParser,
   rowTerminatorChar,
   throwRSVException,
   tryParse,
@@ -34,10 +38,11 @@ module Data.RSV (
   ToRSVRow(..)
 ) where
 
+import Control.Applicative
 import Control.Exception
 import Control.Monad
 import Control.Monad.Error.Class
-import Control.Monad.State
+import Control.Monad.State hiding (lift)
 import Data.Bifunctor
 import Data.ByteString.Builder
 import Data.ByteString.Lazy as LB hiding (drop)
@@ -46,6 +51,7 @@ import Data.Word
 import GHC.IsList
 import Text.Read hiding (get, lift)
 
+import qualified Control.Monad.State as State
 import qualified Data.ByteString as SB 
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.ByteString.Base64.Lazy as B64L
@@ -57,7 +63,7 @@ valueTerminatorChar = 0xFF -- 0xFF
 nullChar = 0xFE -- 0xFE
 rowTerminatorChar = 0xFD
 
-data RSVException = UnexpectedEOF | UnexpectedNull | UnpermittedNull | UnexpectedRowTerminator | UnicodeException TEE.UnicodeException | InvalidFormat | MissingRowTerminator deriving Show 
+data RSVException = UnexpectedError | UnexpectedEOF | UnexpectedNull | UnpermittedNull | UnexpectedRowTerminator | UnicodeException TEE.UnicodeException | InvalidFormat | MissingRowTerminator deriving Show 
 instance Exception RSVException 
 type RSVError = (Integer, RSVException)
 type RSVParseState = (Integer, [Word8])
@@ -79,7 +85,29 @@ parseByteString state = second toByteString <$> parseByteString' False mempty st
       | w == valueTerminatorChar = return ((p + 1, ws), accum)
       | otherwise = parseByteString' hasNull (accum <> [w]) (p + 1, ws)
 
-type RSVParser a = StateT RSVParseState (Either RSVError) a
+newtype RSVParser a = RSVParser { unRSVParser :: StateT RSVParseState (Either RSVError) a }
+  deriving (Functor, Applicative, Monad, MonadState RSVParseState, MonadError RSVError)
+
+instance Alternative RSVParser where
+  empty = throwRSVException UnexpectedError
+  RSVParser lhs <|> RSVParser rhs = RSVParser $ do
+    state <- get
+    let result = runStateT lhs state
+    case result of
+      Left _ -> put state >> rhs
+      Right (a, newState) -> put newState >> return a
+
+lift :: Either RSVError a -> RSVParser a
+lift a = RSVParser $ State.lift a
+
+runRSVParser :: RSVParseState -> RSVParser a -> Either RSVError (a, RSVParseState) 
+runRSVParser state parser = runStateT (unRSVParser parser) state
+
+evalRSVParser :: RSVParseState -> RSVParser a -> Either RSVError a
+evalRSVParser state parser = evalStateT (unRSVParser parser) state
+
+execRSVParser :: RSVParseState -> RSVParser a -> Either RSVError RSVParseState
+execRSVParser state parser = execStateT (unRSVParser parser) state
 
 advanceBy :: Int -> RSVParser ()
 advanceBy n = modify $ bimap (+ fromIntegral n) (drop n)
@@ -118,7 +146,7 @@ assertRowTerminator = do
 tryParse :: RSVParser a -> RSVParser a
 tryParse parser = do 
   state <- get
-  case runStateT parser state of
+  case runRSVParser state parser of
     Left (_, InvalidFormat) -> throwError (fst state, InvalidFormat)
     Left (_, UnpermittedNull) -> throwError (fst state, UnpermittedNull)
     Left e -> throwError e
@@ -213,7 +241,7 @@ parse' = do
     else liftA2 (:) fromRSVRow parse'
 
 parse :: FromRSVRow a => ByteString -> Either RSVError [a]
-parse = evalStateT parse' . (0,) . LB.unpack
+parse = flip evalRSVParser parse' . (0,) . LB.unpack
 
 valueTerminator, nullValue, rowTerminator :: Builder
 valueTerminator = word8 valueTerminatorChar
