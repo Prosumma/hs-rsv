@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
 import Control.Applicative
-import Control.Monad.State
 import Data.ByteString.Lazy as LB hiding (drop)
 import Data.RSV
 import Data.Text as T hiding (drop)
 import Test.Hspec
-import Text.Read
 
 data Person = Person {
   name :: !Text,
