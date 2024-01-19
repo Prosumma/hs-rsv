@@ -1,100 +1,44 @@
-{-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
 
-import Control.Applicative
-import Data.ByteString.Lazy as LB hiding (drop)
 import Data.RSV
-import Data.Text as T hiding (drop)
+import Data.Text
 import Test.Hspec
 
-data Person = Person {
-  name :: !Text,
-  num  :: !(Maybe Int)
-} deriving (Eq, Show) 
+import qualified Data.ByteString.Lazy as LB
 
-data PersonOrName = PersonOnly !Person | NameOnly !Text deriving (Eq, Show)
+data Person = Person { firstName :: !Text, lastName :: !Text, age :: !(Maybe Int) } deriving (Eq, Show)
 
-instance ToRSVRow Person where
-  toRSVRow Person{..} = encodeRow $ toRSV name <> toRSV num
-
-instance FromRSVRow Person where
-  fromRSVRow = parseRow $ Person <$> fromRSV <*> fromRSV
-
-instance ToRSVRow PersonOrName where
-  toRSVRow (PersonOnly person) = toRSVRow person
-  toRSVRow (NameOnly name) = toRSVRow [name]
-
-instance FromRSVRow PersonOrName where
-  fromRSVRow = (PersonOnly <$> fromRSVRow) <|> parseRow (NameOnly <$> fromRSV)
+instance FromRow Person where
+  fromRow = parseRow $ Person <$> fromValue <*> fromValue <*> fromValue
 
 main :: IO ()
-main = hspec $ do
-  describe "parseValue" $ do
-    it "throws UnpermittedNull on null" $ do
-      let bytes = [nullChar, valueTerminatorChar]
-      case evalRSVParser (0, bytes) parseValue of
-        Left (p, UnpermittedNull) -> do
-          p `shouldBe` 0
-        Left e -> expectationFailure $ "Expected unpermitted null, but got " <> show e
-        Right _ -> expectationFailure "Expected evaluation to fail, but it suceeded."
-  describe "permitNull" $ do
-    it "permits a null" $ do
-      let bytes = [nullChar, valueTerminatorChar]
-      case evalRSVParser (0, bytes) (permitNull parseValue) of
+main = hspec $ do 
+  describe "parse" $ do
+    it "parses" $ do
+      let lbs = LB.pack [0x79, valueTerminatorChar, 0x66, valueTerminatorChar, rowTerminatorChar, 0x79, valueTerminatorChar, 0x66, valueTerminatorChar, rowTerminatorChar]
+      let result :: Either IndexedException [(Text, Text)] = parse lbs
+      case result of
         Left e -> expectationFailure (show e)
-        Right p -> p `shouldBe` Nothing
-    it "advances the state properly" $ do
-      let bytes = [nullChar, valueTerminatorChar]
-      case execRSVParser (0, bytes) (permitNull parseValue) of
+        Right a -> a `shouldBe` [("y", "f"), ("y", "f")] 
+    it "parses Maybe" $ do
+      let lbs = LB.pack [0x79, valueTerminatorChar, 0x66, valueTerminatorChar, rowTerminatorChar, nullChar, valueTerminatorChar, 0x66, valueTerminatorChar, rowTerminatorChar]
+      let result :: Either IndexedException [(Maybe Text, Maybe Text)] = parse lbs
+      case result of
         Left e -> expectationFailure (show e)
-        Right s -> s `shouldBe` (2, [])
-  describe "parseRead" $ do
-    it "reads an Int and properly advances the state" $ do
-      let bytes = [0x31, 0x32, valueTerminatorChar]
-      case runRSVParser (0, bytes) parseRead of
-        Left e -> expectationFailure (show e)
-        Right (n, s) -> do
-          n `shouldBe` (12 :: Int)
-          s `shouldBe` (3, [])
-    it "properly rewinds the state in the case of InvalidFormat" $ do
-      let bytes = [0x31, 0x79, valueTerminatorChar]
-      case runRSVParser (0, bytes) (parseRead :: RSVParser Int) of
-        Left (p, InvalidFormat) -> p `shouldBe` 0
-        _ -> expectationFailure "Expected to fail, but it succeeded."
-  describe "parseList" $ do
-    it "parses a list" $ do
-      let input :: [[Text]] = [["encode", "this"], ["then", "decode"]]
-      let encoded = encode input
-      let bytes = LB.unpack encoded
-      let dl = parseList :: RSVParser [Text]
-      case runRSVParser (0, bytes) dl of
-        Left e -> expectationFailure (show e)
-        Right (a, (p, _)) -> do
-          a `shouldBe` ["encode", "this"]
-          p `shouldBe` 13
-          bytes !! 13 `shouldBe` 0x74
-  describe "encode and parse" $ do
-    it "roundtrips [[Maybe Text]]" $ do
-      let input :: [[Maybe Text]] = [[Just "encode", Just "this"], [Just "then", Just "decode"]]
-      let encoded = encode input
-      case parse encoded of
-        Left e -> expectationFailure (show e)
-        Right a -> a `shouldBe` input
-    it "roundtrips [Person]" $ do
-      let input = [Person "Greg" (Just 3), Person "Rose" (Just 9)]
-      let encoded = encode input
-      case parse encoded of
-        Left e -> expectationFailure (show e)
-        Right a -> a `shouldBe` input
-    it "roundtrips different types" $ do
-      let input = [Person "Greg" (Just 3), Person "Rose" (Just 9)]
-      let encoded = encode input
-      let expected :: [[Text]] = [["Greg", "3"], ["Rose", "9"]]
-      case parse encoded of
-        Left e -> expectationFailure (show e)
-        Right a -> a `shouldBe` expected 
-    it "supports jagged rows" $ do
-      let input = [NameOnly "Ludwig", PersonOnly (Person "Karl" Nothing)]
-      let encoded = encode input
-      case parse encoded of
-        Left e -> expectationFailure (show e)
-        Right a -> a `shouldBe` input 
+        Right a -> a `shouldBe` [(Just "y", Just "f"), (Nothing, Just "f")] 
+    it "throws a Unicode error at the correct indices" $ do
+      let invalidUtf8 = LB.pack [0x79, valueTerminatorChar, 0x80, 0x81, 0xC0, 0xC1, 0x90, valueTerminatorChar, rowTerminatorChar]
+      let result :: Either IndexedException [[Text]] = parse invalidUtf8 
+      case result of
+        -- The indices mean:
+        -- 1. The byte index is 8. We can ignore this one for a unicode error.
+        -- 2. The value index is 2. This is the byte offset of the offending value.
+        -- 3. The row index is 0. This is the byte offset of the offending row.
+        Left e -> e `shouldBe` (ParserIndices 8 2 0, UnicodeError)
+        Right _ -> expectationFailure "What?"
+    it "throws a ConversionError at the correct indices" $ do
+      let invalidInt = LB.pack [0x79, 0x66, valueTerminatorChar, rowTerminatorChar]
+      let result :: Either IndexedException [[Int]] = parse invalidInt
+      case result of
+        Left e -> e `shouldBe` (ParserIndices 3 0 0, ConversionError "Could not convert string yf to desired type")
+        Right _ -> expectationFailure "Hunh?"

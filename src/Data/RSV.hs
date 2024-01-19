@@ -1,308 +1,221 @@
-{-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, TupleSections #-}
+{-# LANGUAGE FlexibleContexts, GeneralisedNewtypeDeriving #-}
 
 module Data.RSV (
-  assertRowTerminator,
-  encode,
-  encodeNull,
-  encodeShow,
-  encodeStringUnsafe,
-  encodeText,
-  encodeRow,
-  evalRSVParser,
-  execRSVParser,
-  lift,
+  decodeValue,
+  formatValue,
+  newParserState,
   nullChar,
   parse,
-  parse',
-  parseBinary,
-  parseBinaryLazy,
-  parseList,
   parseRead,
   parseRow,
+  parseString,
+  parseText,
   parseValue,
   permitNull,
-  runRSVParser,
   rowTerminatorChar,
-  throwRSVException,
-  tryParse,
+  throwIndexedException,
   valueTerminatorChar,
-  Builder,
-  FromRSV(..),
-  FromRSVRow(..),
-  RSVError,
-  RSVException(..),
-  RSVParser,
-  RSVParseState,
-  ToRSV(..),
-  ToRSVRow(..)
+  FromRow(..),
+  FromValue(..),
+  IndexedException,
+  ParseException(..),
+  ParserIndices(..),
+  ParserState(..),
+  RowParser(..),
+  ValueParser
 ) where
 
 import Control.Applicative
-import Control.Exception
-import Control.Monad
 import Control.Monad.Error.Class
-import Control.Monad.State hiding (lift)
+import Control.Monad.State (evalStateT, gets, modify, runStateT, MonadState(..), StateT(..))
 import Data.Bifunctor
-import Data.ByteString.Builder
-import Data.ByteString.Lazy as LB hiding (drop)
-import Data.Text as T hiding (drop)
+import Data.ByteString.Lazy (LazyByteString)
+import Data.ByteString (StrictByteString)
+import Data.Text (Text)
 import Data.Word
-import GHC.IsList
-import Text.Read hiding (get, lift)
+import Text.Printf
+import Text.Read hiding (get)
 
-import qualified Control.Monad.State as State
-import qualified Data.ByteString as SB 
-import qualified Data.ByteString.Base64 as B64
-import qualified Data.ByteString.Base64.Lazy as B64L
+import qualified Data.ByteString as SB
+import qualified Data.ByteString.Lazy as LB
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Encoding.Error as TEE
 
 valueTerminatorChar, nullChar, rowTerminatorChar :: Word8
-valueTerminatorChar = 0xFF -- 0xFF
-nullChar = 0xFE -- 0xFE
+valueTerminatorChar = 0xFF
+nullChar = 0xFE
 rowTerminatorChar = 0xFD
 
-data RSVException = UnexpectedError | UnexpectedEOF | UnexpectedNull | UnpermittedNull | UnexpectedRowTerminator | UnicodeException TEE.UnicodeException | InvalidFormat | MissingRowTerminator deriving Show 
-instance Exception RSVException 
-type RSVError = (Integer, RSVException)
-type RSVParseState = (Integer, [Word8])
+data ParserIndices = ParserIndices {
+  byteIndex  :: !Integer,
+  valueIndex :: !Integer,
+  rowIndex   :: !Integer
+} deriving (Eq, Show)
 
-parseByteString :: RSVParseState -> Either RSVError (RSVParseState, Maybe SB.ByteString)
-parseByteString state = second toByteString <$> parseByteString' False mempty state 
-  where
-    toByteString :: [Word8] -> Maybe SB.ByteString
-    toByteString ws
-      | ws == [nullChar] = Nothing
-      | otherwise = Just $ SB.pack ws
-    parseByteString' :: Bool -> [Word8] -> RSVParseState -> Either RSVError (RSVParseState, [Word8])
-    parseByteString' _ _ (p, []) = throwError (p, UnexpectedEOF)
-    parseByteString' hasNull accum (p, w:ws)
-      | w == rowTerminatorChar = throwError (p, UnexpectedRowTerminator)
-      | not (Prelude.null accum) && w == nullChar = throwError (p, UnexpectedNull)
-      | not hasNull && w == nullChar = parseByteString' True [w] (p + 1, ws)
-      | hasNull && w /= valueTerminatorChar = throwError (p - 1, UnexpectedNull)
-      | w == valueTerminatorChar = return ((p + 1, ws), accum)
-      | otherwise = parseByteString' hasNull (accum <> [w]) (p + 1, ws)
+advanceByteIndex :: ParserIndices -> ParserIndices
+advanceByteIndex (ParserIndices b v r) = ParserIndices (b + 1) v r
 
-newtype RSVParser a = RSVParser { unRSVParser :: StateT RSVParseState (Either RSVError) a }
-  deriving (Functor, Applicative, Monad, MonadState RSVParseState, MonadError RSVError)
+rewindByteIndex :: ParserIndices -> ParserIndices
+rewindByteIndex (ParserIndices b v r) = ParserIndices (b - 1) v r
 
-instance Alternative RSVParser where
-  empty = throwRSVException UnexpectedError
-  RSVParser lhs <|> RSVParser rhs = RSVParser $ do
+resetValueIndex :: ParserIndices -> ParserIndices
+resetValueIndex (ParserIndices b v r) = ParserIndices b b r
+
+resetRowIndex :: ParserIndices -> ParserIndices
+resetRowIndex (ParserIndices b v r) = ParserIndices b b b
+
+data ParserState = ParserState {
+  remainingBytes :: [Word8],
+  parserIndices :: !ParserIndices
+} deriving (Eq, Show)
+
+newParserState :: LazyByteString -> ParserState
+newParserState lbs = ParserState (LB.unpack lbs) (ParserIndices 0 0 0)
+
+advanceParserState :: [Word8] -> ParserState -> ParserState
+advanceParserState bytes (ParserState _ indices) = ParserState bytes (advanceByteIndex indices)
+
+data ParseException = UnknownError | UnexpectedEOF | UnexpectedNull | UnexpectedRowTerminator | UnpermittedNull | UnicodeError | ConversionError String | MissingRowTerminator deriving (Eq, Show)
+type IndexedException = (ParserIndices, ParseException)
+
+newtype ValueParser a = ValueParser (StateT ParserState (Either IndexedException) a)
+  deriving (Functor, Applicative, Monad, MonadState ParserState, MonadError IndexedException)
+
+throwIndexedException :: (MonadState ParserState m, MonadError IndexedException m) => ParseException -> m a
+throwIndexedException e = do
+  indices <- gets parserIndices
+  throwError (indices, e)
+
+instance Alternative ValueParser where
+  empty = throwIndexedException UnknownError
+  (ValueParser lhs) <|> (ValueParser rhs) = ValueParser $ do
     state <- get
     let result = runStateT lhs state
     case result of
-      Left _ -> put state >> rhs
+      Left _ -> rhs
       Right (a, newState) -> put newState >> return a
 
-lift :: Either RSVError a -> RSVParser a
-lift a = RSVParser $ State.lift a
-
-runRSVParser :: RSVParseState -> RSVParser a -> Either RSVError (a, RSVParseState) 
-runRSVParser state parser = runStateT (unRSVParser parser) state
-
-evalRSVParser :: RSVParseState -> RSVParser a -> Either RSVError a
-evalRSVParser state parser = evalStateT (unRSVParser parser) state
-
-execRSVParser :: RSVParseState -> RSVParser a -> Either RSVError RSVParseState
-execRSVParser state parser = execStateT (unRSVParser parser) state
-
-advanceBy :: Int -> RSVParser ()
-advanceBy n = modify $ bimap (+ fromIntegral n) (drop n)
-
-throwRSVException :: RSVException -> RSVParser a
-throwRSVException e = do
-  p <- gets fst
-  throwError (p, e)
-
-atRowTerminator :: RSVParser Bool
-atRowTerminator = gets snd >>= check 
+decodeValue :: ParserState -> Either IndexedException (Maybe StrictByteString, ParserState)
+decodeValue (ParserState bytes indices) = first toStrictByteString <$>
+    decodeValue' (ParserState bytes (resetValueIndex indices)) mempty False
   where
-    check :: [Word8] -> RSVParser Bool
-    check (w:_) = return $ w == rowTerminatorChar
-    check _ = return False
+    decodeValue' :: ParserState -> [Word8] -> Bool -> Either IndexedException ([Word8], ParserState)
+    decodeValue' (ParserState [] indices) _ _ = throwError (indices, UnexpectedEOF)
+    decodeValue' state@(ParserState (byte:remainingBytes) indices) accum hasNull
+      | byte == rowTerminatorChar = throwError (indices, UnexpectedRowTerminator)
+      | not (null accum) && byte == nullChar = throwError (indices, UnexpectedNull)
+      | not hasNull && byte == nullChar = decodeValue' (advanceParserState remainingBytes state) [byte] True
+      | hasNull && byte /= valueTerminatorChar = throwError (rewindByteIndex indices, UnexpectedNull)
+      | byte == valueTerminatorChar = return (accum, advanceParserState remainingBytes state)
+      | otherwise = decodeValue' (advanceParserState remainingBytes state) (accum <> [byte]) hasNull
+    toStrictByteString :: [Word8] -> Maybe StrictByteString
+    toStrictByteString bytes
+      | bytes == [nullChar] = Nothing
+      | otherwise = Just $ SB.pack bytes
 
-atParsedRowTerminator :: RSVParser Bool
-atParsedRowTerminator = do
-  terminated <- atRowTerminator
-  when terminated $ advanceBy 1 
-  return terminated
-
-assertRowTerminator :: RSVParser ()
-assertRowTerminator = do
-  terminated <- atParsedRowTerminator
-  unless terminated $ throwRSVException MissingRowTerminator
-
--- | Properly rewinds the state in the case of @InvalidFormat@ or @UnpermittedNull@.
---
--- For all other RSVException types, we want the index position to remain the same
--- as it was when the exception was thrown. But for these two, we want it to be
--- at the position it was when parsing started.
--- 
--- In general, any parser which can fail with @InvalidFormat@ or @UnpermittedNull@ should
--- start with this function. For an example, see @parseText@.
-tryParse :: RSVParser a -> RSVParser a
-tryParse parser = do 
-  state <- get
-  case runRSVParser state parser of
-    Left (_, InvalidFormat) -> throwError (fst state, InvalidFormat)
-    Left (_, UnpermittedNull) -> throwError (fst state, UnpermittedNull)
+parseValue :: ValueParser StrictByteString
+parseValue = do
+  result <- gets decodeValue
+  case result of
     Left e -> throwError e
-    Right (a, newState) -> put newState >> return a
+    Right (Nothing, newState) -> put newState >> throwIndexedException UnpermittedNull
+    Right (Just bs, newState) -> put newState >> return bs
 
-parseValue :: RSVParser SB.ByteString 
-parseValue = do 
-  state <- get
-  (newState, sb) <- lift $ parseByteString state
-  put newState
-  case sb of
-    Just sb -> return sb 
-    Nothing -> throwError (fst state, UnpermittedNull) 
+parseText :: ValueParser Text
+parseText = do
+  sbs <- parseValue
+  case TE.decodeUtf8' sbs of
+    Left _ -> throwIndexedException UnicodeError
+    Right t -> return t
 
-convertValue :: (SB.ByteString -> Either RSVException a) -> SB.ByteString -> RSVParser a
-convertValue convert bs = case convert bs of
-  Right a -> return a
-  Left e -> throwRSVException e
-
-parseText :: RSVParser Text
-parseText = tryParse $ parseValue >>= convertValue (first UnicodeException . TE.decodeUtf8')
-
-parseString :: RSVParser String
+parseString :: ValueParser String
 parseString = T.unpack <$> parseText
 
-parseRead :: Read a => RSVParser a
-parseRead = tryParse $ do
+parseRead :: Read a => ValueParser a
+parseRead = do
   s <- parseString
   case readMaybe s of
+    Nothing -> throwIndexedException $ ConversionError $ printf "Could not convert string %s to desired type." s
     Just a -> return a
-    Nothing -> throwRSVException InvalidFormat
 
-parseBinary :: RSVParser SB.ByteString
-parseBinary = tryParse $ parseValue >>= convertValue (first (const InvalidFormat) . B64.decode)
-
-parseBinaryLazy :: RSVParser ByteString
-parseBinaryLazy = fromStrict <$> parseBinary
-
-permitNull :: RSVParser a -> RSVParser (Maybe a)
-permitNull parser = catchError (Just <$> parser) handler
-  where
-    -- We need to advance by 2 because `catchError` resets the state
-    -- to what it was before parsing.
-    handler (_, UnpermittedNull) = advanceBy 2 >> return Nothing
-    handler e = throwError e
-
-class FromRSV a where
-  fromRSV :: RSVParser a
-
-instance FromRSV Text where
-  fromRSV = parseText
-
-instance FromRSV String where
-  fromRSV = parseString
-
-instance FromRSV Int where
-  fromRSV = parseRead
-
-instance FromRSV SB.ByteString where
-  fromRSV = parseBinary
-
-instance FromRSV ByteString where
-  fromRSV = parseBinaryLazy
-
-instance FromRSV a => FromRSV (Maybe a) where
-  fromRSV = permitNull fromRSV
-
-class FromRSVRow a where
-  fromRSVRow :: RSVParser a
-
-parseRow :: RSVParser a -> RSVParser a
-parseRow parser = parser <* assertRowTerminator
-
-parseList' :: FromRSV a => RSVParser [a]
-parseList' = do
-  terminated <- atRowTerminator
-  if terminated 
-    then advanceBy 1 >> return []
-    else liftA2 (:) fromRSV parseList'
-
-parseList :: (FromRSV (Item l), IsList l) => RSVParser l
-parseList = fromList <$> parseList'
-
-instance FromRSV a => FromRSVRow [a] where 
-  fromRSVRow = parseList'
-
-parse' :: FromRSVRow a => RSVParser [a]
-parse' = do
-  end <- gets $ Prelude.null . snd
-  if end 
+parseList :: FromValue a => ValueParser [a]
+parseList = do 
+  done <- isAtRowTerminator
+  if done
     then return []
-    else liftA2 (:) fromRSVRow parse'
+    else liftA2 (:) fromValue parseList
+  where
+    isAtRowTerminator = gets remainingBytes >>= checkRowTerminator 
+    checkRowTerminator [] = throwIndexedException UnexpectedEOF 
+    checkRowTerminator (byte:_)
+      | byte == rowTerminatorChar = return True
+      | otherwise = return False
 
-parse :: FromRSVRow a => ByteString -> Either RSVError [a]
-parse = flip evalRSVParser parse' . (0,) . LB.unpack
+formatValue :: (v -> Either String a) -> v -> ValueParser a
+formatValue convert value = case convert value of
+  Left error -> throwIndexedException (ConversionError error)
+  Right a -> return a
 
-valueTerminator, nullValue, rowTerminator :: Builder
-valueTerminator = word8 valueTerminatorChar
-nullValue = word8 nullChar
-rowTerminator = word8 rowTerminatorChar
+permitNull :: ValueParser a -> ValueParser (Maybe a)
+permitNull parser = catchError (Just <$> parser) handleError
+  where
+    handleError (_, UnpermittedNull) = modify advanceBy2 >> return Nothing
+    handleError e = throwError e
+    advanceBy2 (ParserState bytes (ParserIndices b v r)) = ParserState (drop 2 bytes) (ParserIndices (b + 2) v r)
 
--- | Encodes a string to RSV
---
--- This function is inherently unsafe because the Haskell @String@
--- type is not guaranteed to have any particular encoding.
-encodeStringUnsafe :: String -> Builder
-encodeStringUnsafe s = stringUtf8 s <> valueTerminator
+class FromValue a where
+  fromValue :: ValueParser a
 
-encodeNull :: Builder
-encodeNull = nullValue <> valueTerminator
+instance FromValue Text where
+  fromValue = parseText
 
-encodeShow :: Show a => a -> Builder
-encodeShow = encodeStringUnsafe . show
+instance FromValue Int where
+  fromValue = parseRead
 
-encodeText :: Text -> Builder
-encodeText = encodeStringUnsafe . T.unpack
+instance FromValue a => FromValue (Maybe a) where
+  fromValue = permitNull fromValue
 
-encodeBinary :: SB.ByteString -> Builder
-encodeBinary = byteString . B64.encode
+newtype RowParser a = RowParser (StateT ParserState (Either IndexedException) a)
+  deriving (Functor, Applicative, Monad, MonadState ParserState, MonadError IndexedException)
 
-encodeBinaryLazy :: ByteString -> Builder
-encodeBinaryLazy = lazyByteString . B64L.encode
+instance Alternative RowParser where
+  empty = throwIndexedException UnknownError
+  (RowParser lhs) <|> (RowParser rhs) = RowParser $ do
+    state <- get
+    let result = runStateT lhs state
+    case result of
+      Left _ -> rhs
+      Right (a, newState) -> put newState >> return a
 
-class ToRSV a where
-  toRSV :: a -> Builder
+parseRow :: ValueParser a -> RowParser a
+parseRow (ValueParser parser) = do
+  state <- gets resetRow
+  case runStateT parser state of
+    Left e -> throwError e
+    Right (result, newState) -> put newState >> finish result (remainingBytes newState)
+  where
+    resetRow (ParserState bytes indices) = ParserState bytes (resetRowIndex indices)
+    finish _ [] = throwIndexedException UnexpectedEOF
+    finish a (byte:bytes)
+      | byte == rowTerminatorChar = modify (advanceParserState bytes) >> return a
+      | otherwise = throwIndexedException MissingRowTerminator
 
-instance ToRSV String where
-  toRSV = encodeStringUnsafe
+class FromRow a where
+  fromRow :: RowParser a
 
-instance ToRSV Text where
-  toRSV = encodeText
+instance (FromValue a, FromValue b) => FromRow (a, b) where
+  fromRow = parseRow $ (,) <$> fromValue <*> fromValue
 
-instance ToRSV Int where
-  toRSV = encodeShow
 
-instance ToRSV SB.ByteString where
-  toRSV = encodeBinary
+instance FromValue a => FromRow [a] where
+  fromRow = parseRow parseList
 
-instance ToRSV ByteString where
-  toRSV = encodeBinaryLazy
-
-instance ToRSV a => ToRSV (Maybe a) where
-  toRSV Nothing = encodeNull
-  toRSV (Just a) = toRSV a
-
-encodeRow :: Builder -> Builder
-encodeRow = (<> rowTerminator)
-
-class ToRSVRow a where
-  toRSVRow :: a -> Builder
-
-instance (Foldable t, ToRSV a) => ToRSVRow (t a) where
-  toRSVRow = encodeRow . foldMap toRSV
-
-instance ToRSVRow a => ToRSVRow (Maybe a) where
-  toRSVRow Nothing = mempty
-  toRSVRow (Just a) = toRSVRow a
-
-encode :: (Foldable t, ToRSVRow a) => t a -> ByteString
-encode = toLazyByteString . foldMap toRSVRow
+parse :: FromRow a => LazyByteString -> Either IndexedException [a]
+parse = evalStateT (parse' fromRow) . newParserState
+  where
+    parse' (RowParser parser) = do 
+      isAtEnd <- atEnd
+      if isAtEnd
+        then return []
+        else liftA2 (:) parser (parse' (RowParser parser))
+    atEnd = gets $ null . remainingBytes
