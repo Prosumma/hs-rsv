@@ -1,6 +1,9 @@
-{-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, OverloadedStrings, TypeFamilies #-}
+
+-- Implement ParserConfig with Default, RWST with () for W, etc.
 
 module Data.RSV (
+  convertValue,
   decodeValue,
   encode,
   encodeRow,
@@ -8,7 +11,6 @@ module Data.RSV (
   encodeShow,
   encodeStringUnsafe,
   encodeText,
-  formatValue,
   newParserState,
   nullChar,
   parse,
@@ -42,7 +44,6 @@ import Data.ByteString.Lazy (LazyByteString)
 import Data.ByteString (StrictByteString)
 import Data.Text (Text)
 import Data.Word
-import GHC.IsList
 import Text.Printf
 import Text.Read hiding (get)
 
@@ -161,8 +162,8 @@ parseList = do
       | byte == rowTerminatorChar = return True
       | otherwise = return False
 
-formatValue :: (v -> Either String a) -> v -> ValueParser a
-formatValue convert value = case convert value of
+convertValue :: (v -> Either String a) -> v -> ValueParser a
+convertValue convert value = case convert value of
   Left error -> throwIndexedException (ConversionError error)
   Right a -> return a
 
@@ -181,6 +182,22 @@ instance FromValue Text where
 
 instance FromValue Int where
   fromValue = parseRead
+
+instance FromValue Integer where
+  fromValue = parseRead
+
+instance FromValue Bool where
+  fromValue = parseText >>= convertValue toBool 
+    where
+      toBool :: Text -> Either String Bool
+      toBool text
+        | lowerText `elem` trueValues = return True 
+        | lowerText `elem` falseValues = return False
+        | otherwise = throwError $ printf "The value '%s' is not a valid value for Bool. Use a newtype wrapper." (show text) 
+        where
+          lowerText = T.toLower text
+      trueValues = ["true", "t", "yes", "y", "1"]
+      falseValues = ["false", "f", "no", "n", "0"]
 
 instance FromValue a => FromValue (Maybe a) where
   fromValue = permitNull fromValue
@@ -255,6 +272,10 @@ instance ToValue Text where
 
 instance ToValue Int where
   toValue = encodeShow
+
+instance ToValue Bool where
+  toValue True = encodeValue $ stringUtf8 "true" 
+  toValue False = encodeValue $ stringUtf8 "false"
 
 instance ToValue a => ToValue (Maybe a) where
   toValue Nothing = encodeNull
