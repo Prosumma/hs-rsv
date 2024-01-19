@@ -10,6 +10,7 @@ module Data.RSV (
   encodeShow,
   encodeStringUnsafe,
   encodeText,
+  encodeWith,
   foldApp,
   newParserState,
   nullChar,
@@ -19,6 +20,7 @@ module Data.RSV (
   parseString,
   parseText,
   parseValue,
+  parseWith,
   permitNull,
   rowTerminatorChar,
   throwIndexedException,
@@ -39,7 +41,7 @@ module Data.RSV (
 
 import Control.Applicative
 import Control.Monad.Error.Class
-import Control.Monad.Reader (runReader, MonadReader(..), Reader)
+import Control.Monad.Reader (asks, runReader, MonadReader(..), Reader)
 import Control.Monad.State (gets, modify, MonadState(..))
 import Control.Monad.Trans.RWS (evalRWST, runRWST, RWST)
 import Data.Bifunctor
@@ -50,7 +52,6 @@ import Data.Default
 import Data.Set (member, Set)
 import Data.Text (Text)
 import Data.Word
-import Debug.Trace
 import Text.Printf
 import Text.Read hiding (get)
 
@@ -313,6 +314,10 @@ instance ToValue String where
 
 instance ToValue Int where
   toValue = encodeShow
+
+instance ToValue Bool where
+  toValue True = asks trueValue >>= encodeText 
+  toValue False = asks falseValue >>= encodeText
 
 instance ToValue a => ToValue (Maybe a) where
   toValue Nothing = encodeNull

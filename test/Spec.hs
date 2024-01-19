@@ -2,16 +2,18 @@
 
 import Control.Applicative
 import Control.Monad.IO.Class
+import Data.Default
 import Data.RSV
 import Data.Text
 import Test.Hspec
 
 import qualified Data.ByteString.Lazy as LB
+import qualified Data.Set as Set
 
 data Person = Person { firstName :: !Text, lastName :: !Text, year :: !(Maybe Int) } deriving (Eq, Show)
 
 instance ToRow Person where
-  toRow Person{..} = encodeRow $ toValue firstName <+> toValue lastName <+> toValue year 
+  toRow Person{..} = encodeRow $ toValue firstName <+> toValue lastName <+> toValue year
 
 instance FromRow Person where
   fromRow = parseRow $ Person <$> fromValue <*> fromValue <*> fromValue
@@ -25,8 +27,11 @@ instance ToValue X where
 instance FromValue X where
   fromValue = (XInt <$> fromValue) <|> XText <$> fromValue
 
+roundtripWith :: (Foldable t, ToRow a, FromRow a) => ParserConfig -> t a -> Either IndexedException [a]
+roundtripWith config = parseWith config . encodeWith config
+
 roundtrip :: (Foldable t, ToRow a, FromRow a) => t a -> Either IndexedException [a]
-roundtrip = parse . encode
+roundtrip = roundtripWith def 
 
 main :: IO ()
 main = hspec $ do 
@@ -75,3 +80,11 @@ main = hspec $ do
       case roundtrip people of
         Left e -> expectationFailure (show e)
         Right people' -> people' `shouldBe` people
+  describe "bool" $ do
+    it "is configurable" $ do
+      let currentFalseValues = falseValues (def :: ParserConfig)
+      let config = def {falseValues=currentFalseValues<>Set.fromList ["gronk"],falseValue="gronk"}
+      let bools = [[True, False, True]]
+      case roundtripWith config bools of
+        Left e -> expectationFailure (show e)
+        Right bools' -> bools' `shouldBe` bools
