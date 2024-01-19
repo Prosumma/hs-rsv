@@ -1,16 +1,16 @@
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, OverloadedStrings, TypeFamilies #-}
 
--- Implement ParserConfig with Default, RWST with () for W, etc.
-
 module Data.RSV (
   convertValue,
   decodeValue,
   encode,
+  encodeNull,
   encodeRow,
   encodeValue,
   encodeShow,
   encodeStringUnsafe,
   encodeText,
+  foldApp,
   newParserState,
   nullChar,
   parse,
@@ -33,12 +33,13 @@ module Data.RSV (
   RowParser,
   ToRow(..),
   ToValue(..),
-  ValueParser
+  ValueParser,
+  (<+>)
 ) where
 
 import Control.Applicative
 import Control.Monad.Error.Class
-import Control.Monad.Reader (MonadReader(..))
+import Control.Monad.Reader (runReader, MonadReader(..), Reader)
 import Control.Monad.State (gets, modify, MonadState(..))
 import Control.Monad.Trans.RWS (evalRWST, runRWST, RWST)
 import Data.Bifunctor
@@ -49,6 +50,7 @@ import Data.Default
 import Data.Set (member, Set)
 import Data.Text (Text)
 import Data.Word
+import Debug.Trace
 import Text.Printf
 import Text.Read hiding (get)
 
@@ -272,49 +274,61 @@ parseWith config lbs = fst <$> evalRWST (parse' fromRow) config (newParserState 
 parse :: FromRow a => LazyByteString -> Either IndexedException [a]
 parse = parseWith def
 
-encodeValue :: Builder -> Builder
-encodeValue builder = builder <> word8 valueTerminatorChar
+type Encoder = Reader ParserConfig Builder
 
-encodeNull :: Builder
-encodeNull = encodeValue $ word8 nullChar
+infixr 6 <+>
 
-encodeStringUnsafe :: String -> Builder
-encodeStringUnsafe = encodeValue . stringUtf8
+(<+>) :: (Applicative f, Monoid m) => f m -> f m -> f m 
+a <+> b = liftA2 (<>) a b
 
-encodeText :: Text -> Builder
-encodeText = encodeStringUnsafe . T.unpack 
+foldApp :: (Foldable t, Monoid m, Applicative f) => (a -> f m) -> t a -> f m
+foldApp f = foldr (\a accum -> f a <+> accum) (pure mempty)
 
-encodeShow :: Show a => a -> Builder
+encodeValue :: Encoder -> Encoder 
+encodeValue encoder = encoder <+> pure (word8 valueTerminatorChar)
+
+encodeBuilder :: Builder -> Encoder
+encodeBuilder = encodeValue . pure
+
+encodeNull :: Encoder
+encodeNull = encodeBuilder $ word8 nullChar 
+
+encodeStringUnsafe :: String -> Encoder
+encodeStringUnsafe = encodeBuilder . stringUtf8 
+
+encodeText :: Text -> Encoder
+encodeText = encodeStringUnsafe . T.unpack
+
+encodeShow :: Show a => a -> Encoder 
 encodeShow = encodeStringUnsafe . show
 
 class ToValue a where
-  toValue :: a -> Builder
-
-instance ToValue String where
-  toValue = encodeStringUnsafe
+  toValue :: a -> Encoder
 
 instance ToValue Text where
   toValue = encodeText
 
+instance ToValue String where
+  toValue = encodeStringUnsafe
+
 instance ToValue Int where
   toValue = encodeShow
-
-instance ToValue Bool where
-  toValue True = encodeValue $ stringUtf8 "true" 
-  toValue False = encodeValue $ stringUtf8 "false"
 
 instance ToValue a => ToValue (Maybe a) where
   toValue Nothing = encodeNull
   toValue (Just a) = toValue a
 
-encodeRow :: Builder -> Builder
-encodeRow builder = builder <> word8 rowTerminatorChar
+encodeRow :: Encoder -> Encoder
+encodeRow = (<+> pure (word8 rowTerminatorChar))
 
 class ToRow a where
-  toRow :: a -> Builder
+  toRow :: a -> Encoder
 
 instance (Foldable t, ToValue a) => ToRow (t a) where
-  toRow = encodeRow . foldMap toValue 
+  toRow = encodeRow . foldApp toValue
 
-encode :: (Foldable t, ToRow a) => t a -> LazyByteString 
-encode = toLazyByteString . foldMap toRow
+encodeWith :: (Foldable t, ToRow a) => ParserConfig -> t a -> LazyByteString
+encodeWith config rows = toLazyByteString $ runReader (foldApp toRow rows) config
+
+encode :: (Foldable t, ToRow a) => t a -> LazyByteString
+encode = encodeWith def

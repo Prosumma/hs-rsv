@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
 import Control.Applicative
+import Control.Monad.IO.Class
 import Data.RSV
 import Data.Text
 import Test.Hspec
@@ -10,7 +11,7 @@ import qualified Data.ByteString.Lazy as LB
 data Person = Person { firstName :: !Text, lastName :: !Text, year :: !(Maybe Int) } deriving (Eq, Show)
 
 instance ToRow Person where
-  toRow Person{..} = encodeRow $ toValue firstName <> toValue lastName <> toValue year 
+  toRow Person{..} = encodeRow $ toValue firstName <+> toValue lastName <+> toValue year 
 
 instance FromRow Person where
   fromRow = parseRow $ Person <$> fromValue <*> fromValue <*> fromValue
@@ -60,6 +61,7 @@ main = hspec $ do
         Right _ -> expectationFailure "Hunh?"
     it "x's" $ do
       let xs = [[XInt 3, XText "foo"]]
+      liftIO $ print $ encode xs
       case roundtrip xs of
         Left e -> expectationFailure (show e)
         Right xs' -> xs' `shouldBe` xs
@@ -69,6 +71,7 @@ main = hspec $ do
               Person "Dave" "Gahan" (Just 1962),
               Person "Stephen" "Morrissey" (Just 1959)
             ] 
+      liftIO $ print $ encode people
       case roundtrip people of
         Left e -> expectationFailure (show e)
         Right people' -> people' `shouldBe` people
