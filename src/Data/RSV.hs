@@ -1,7 +1,13 @@
-{-# LANGUAGE FlexibleContexts, GeneralisedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, TypeFamilies #-}
 
 module Data.RSV (
   decodeValue,
+  encode,
+  encodeRow,
+  encodeValue,
+  encodeShow,
+  encodeStringUnsafe,
+  encodeText,
   formatValue,
   newParserState,
   nullChar,
@@ -21,7 +27,9 @@ module Data.RSV (
   ParseException(..),
   ParserIndices(..),
   ParserState(..),
-  RowParser(..),
+  RowParser,
+  ToRow(..),
+  ToValue(..),
   ValueParser
 ) where
 
@@ -29,10 +37,12 @@ import Control.Applicative
 import Control.Monad.Error.Class
 import Control.Monad.State (evalStateT, gets, modify, runStateT, MonadState(..), StateT(..))
 import Data.Bifunctor
+import Data.ByteString.Builder
 import Data.ByteString.Lazy (LazyByteString)
 import Data.ByteString (StrictByteString)
 import Data.Text (Text)
 import Data.Word
+import GHC.IsList
 import Text.Printf
 import Text.Read hiding (get)
 
@@ -59,10 +69,10 @@ rewindByteIndex :: ParserIndices -> ParserIndices
 rewindByteIndex (ParserIndices b v r) = ParserIndices (b - 1) v r
 
 resetValueIndex :: ParserIndices -> ParserIndices
-resetValueIndex (ParserIndices b v r) = ParserIndices b b r
+resetValueIndex (ParserIndices b _ r) = ParserIndices b b r
 
 resetRowIndex :: ParserIndices -> ParserIndices
-resetRowIndex (ParserIndices b v r) = ParserIndices b b b
+resetRowIndex (ParserIndices b _ _) = ParserIndices b b b
 
 data ParserState = ParserState {
   remainingBytes :: [Word8],
@@ -206,7 +216,6 @@ class FromRow a where
 instance (FromValue a, FromValue b) => FromRow (a, b) where
   fromRow = parseRow $ (,) <$> fromValue <*> fromValue
 
-
 instance FromValue a => FromRow [a] where
   fromRow = parseRow parseList
 
@@ -219,3 +228,46 @@ parse = evalStateT (parse' fromRow) . newParserState
         then return []
         else liftA2 (:) parser (parse' (RowParser parser))
     atEnd = gets $ null . remainingBytes
+
+encodeValue :: Builder -> Builder
+encodeValue builder = builder <> word8 valueTerminatorChar
+
+encodeNull :: Builder
+encodeNull = encodeValue $ word8 nullChar
+
+encodeStringUnsafe :: String -> Builder
+encodeStringUnsafe = encodeValue . stringUtf8
+
+encodeText :: Text -> Builder
+encodeText = encodeStringUnsafe . T.unpack 
+
+encodeShow :: Show a => a -> Builder
+encodeShow = encodeStringUnsafe . show
+
+class ToValue a where
+  toValue :: a -> Builder
+
+instance ToValue String where
+  toValue = encodeStringUnsafe
+
+instance ToValue Text where
+  toValue = encodeText
+
+instance ToValue Int where
+  toValue = encodeShow
+
+instance ToValue a => ToValue (Maybe a) where
+  toValue Nothing = encodeNull
+  toValue (Just a) = toValue a
+
+encodeRow :: Builder -> Builder
+encodeRow builder = builder <> word8 rowTerminatorChar
+
+class ToRow a where
+  toRow :: a -> Builder
+
+instance (Foldable t, ToValue a) => ToRow (t a) where
+  toRow = encodeRow . foldMap toValue 
+
+encode :: (Foldable t, ToRow a) => t a -> LazyByteString 
+encode = toLazyByteString . foldMap toRow

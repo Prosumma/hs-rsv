@@ -1,15 +1,31 @@
-{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
+import Control.Applicative
 import Data.RSV
 import Data.Text
 import Test.Hspec
 
 import qualified Data.ByteString.Lazy as LB
 
-data Person = Person { firstName :: !Text, lastName :: !Text, age :: !(Maybe Int) } deriving (Eq, Show)
+data Person = Person { firstName :: !Text, lastName :: !Text, year :: !(Maybe Int) } deriving (Eq, Show)
+
+instance ToRow Person where
+  toRow Person{..} = encodeRow $ toValue firstName <> toValue lastName <> toValue year 
 
 instance FromRow Person where
   fromRow = parseRow $ Person <$> fromValue <*> fromValue <*> fromValue
+
+data X = XInt !Int | XText !Text deriving (Eq, Show)
+
+instance ToValue X where
+  toValue (XInt i) = toValue i
+  toValue (XText t) = toValue t
+
+instance FromValue X where
+  fromValue = (XInt <$> fromValue) <|> XText <$> fromValue
+
+roundtrip :: (Foldable t, ToRow a, FromRow a) => t a -> Either IndexedException [a]
+roundtrip = parse . encode
 
 main :: IO ()
 main = hspec $ do 
@@ -31,7 +47,7 @@ main = hspec $ do
       let result :: Either IndexedException [[Text]] = parse invalidUtf8 
       case result of
         -- The indices mean:
-        -- 1. The byte index is 8. We can ignore this one for a unicode error.
+        -- 1. The byte index is 8. We can ignore this one for a unicode error because it applies to the whole value.
         -- 2. The value index is 2. This is the byte offset of the offending value.
         -- 3. The row index is 0. This is the byte offset of the offending row.
         Left e -> e `shouldBe` (ParserIndices 8 2 0, UnicodeError)
@@ -40,5 +56,19 @@ main = hspec $ do
       let invalidInt = LB.pack [0x79, 0x66, valueTerminatorChar, rowTerminatorChar]
       let result :: Either IndexedException [[Int]] = parse invalidInt
       case result of
-        Left e -> e `shouldBe` (ParserIndices 3 0 0, ConversionError "Could not convert string yf to desired type")
+        Left e -> e `shouldBe` (ParserIndices 3 0 0, ConversionError "Could not convert string yf to desired type.")
         Right _ -> expectationFailure "Hunh?"
+    it "x's" $ do
+      let xs = [[XInt 3, XText "foo"]]
+      case roundtrip xs of
+        Left e -> expectationFailure (show e)
+        Right xs' -> xs' `shouldBe` xs
+  describe "encode then parse" $ do
+    it "is a roundtrip ticket" $ do
+      let people :: [Person] = [
+              Person "Dave" "Gahan" (Just 1962),
+              Person "Stephen" "Morrissey" (Just 1959)
+            ] 
+      case roundtrip people of
+        Left e -> expectationFailure (show e)
+        Right people' -> people' `shouldBe` people
