@@ -41,6 +41,7 @@ library
     , mtl
     , text
     , transformers
+    , uuid
   default-language: Haskell2010
 
 executable rsv-exe
@@ -60,6 +61,7 @@ executable rsv-exe
     , rsv
     , text
     , transformers
+    , uuid
   default-language: Haskell2010
 
 test-suite rsv-test
@@ -81,5 +83,6 @@ test-suite rsv-test
     , rsv
     , text
     , transformers
+    , uuid
     , vector
   default-language: Haskell2010

@@ -53,6 +53,7 @@ import Data.ByteString (StrictByteString)
 import Data.Default
 import Data.Set (member, Set)
 import Data.Text (Text)
+import Data.UUID (UUID)
 import Data.Word
 import Text.Printf
 import Text.Read hiding (get)
@@ -62,6 +63,7 @@ import qualified Data.ByteString.Lazy as LB
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.UUID as UUID
 
 askGet :: (MonadReader env m, MonadState state m) => m (env, state)
 askGet = do
@@ -85,7 +87,7 @@ advanceByteIndex (ParserIndices b v r) = ParserIndices (b + 1) v r
 
 data ParserState = ParserState {
   remainingBytes :: [Word8],
-  parserIndices :: !ParserIndices
+  parserIndices  :: !ParserIndices
 } deriving (Eq, Show)
 
 newParserState :: LazyByteString -> ParserState
@@ -213,6 +215,9 @@ instance FromValue Int where
 instance FromValue Integer where
   fromValue = parseRead
 
+instance FromValue Double where
+  fromValue = parseRead
+
 instance FromValue Bool where
   fromValue = do
     config <- ask
@@ -222,9 +227,17 @@ instance FromValue Bool where
       toBool config text
         | lowerText `member` trueValues config = return True 
         | lowerText `member` falseValues config = return False
-        | otherwise = throwError $ printf "The value '%s' is not a valid value for Bool. Use a newtype wrapper." (show text) 
+        | otherwise = throwError $ printf "The value '%s' is not a valid value for Bool." (show text) 
         where
           lowerText = T.toLower text
+
+instance FromValue UUID where
+  fromValue = parseString >>= convertValue toUUID
+    where
+      toUUID :: String -> Either String UUID
+      toUUID s = case UUID.fromString s of
+        Just uuid -> return uuid
+        Nothing -> throwError $ printf "Could not convert %s to a UUID." s
 
 instance FromValue a => FromValue (Maybe a) where
   fromValue = permitNull fromValue
@@ -321,9 +334,15 @@ instance ToValue Int where
 instance ToValue Integer where
   toValue = encodeShow
 
+instance ToValue Double where
+  toValue = encodeShow
+
 instance ToValue Bool where
   toValue True = asks trueValue >>= encodeText 
   toValue False = asks falseValue >>= encodeText
+
+instance ToValue UUID where
+  toValue = encodeStringUnsafe . UUID.toString
 
 instance ToValue a => ToValue (Maybe a) where
   toValue Nothing = encodeNull
