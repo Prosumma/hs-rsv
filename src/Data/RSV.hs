@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, OverloadedStrings, TypeFamilies #-}
+{-# LANGUAGE ExistentialQuantification, FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, OverloadedStrings, TypeFamilies #-}
 
 module Data.RSV (
   convertValue,
@@ -6,17 +6,21 @@ module Data.RSV (
   defaultFalseValues,
   defaultTrueValues,
   encode,
+  encodeBinary,
+  encodeBinaryLazy,
   encodeNull,
   encodeRow,
-  encodeValue,
   encodeShow,
   encodeStringUnsafe,
   encodeText,
+  encodeValue,
   encodeWith,
   foldApp,
   newParserState,
   nullChar,
   parse,
+  parseBinary,
+  parseBinaryLazy,
   parseRead,
   parseRow,
   parseString,
@@ -27,6 +31,7 @@ module Data.RSV (
   rowTerminatorChar,
   throwIndexedException,
   valueTerminatorChar,
+  Encodable(..),
   FromRow(..),
   FromValue(..),
   IndexedException,
@@ -61,6 +66,8 @@ import Text.Printf
 import Text.Read hiding (get)
 
 import qualified Data.ByteString as SB
+import qualified Data.ByteString.Base64 as B64
+import qualified Data.ByteString.Base64.Lazy as B64L
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -173,6 +180,12 @@ parseText = do
 parseString :: ValueParser String
 parseString = T.unpack <$> parseText
 
+parseBinary :: ValueParser StrictByteString
+parseBinary = parseValue >>= convertValue B64.decode
+
+parseBinaryLazy :: ValueParser LazyByteString
+parseBinaryLazy = LB.fromStrict <$> parseBinary
+
 parseRead :: Read a => String -> ValueParser a
 parseRead typename = do
   s <- parseString
@@ -244,6 +257,12 @@ instance FromValue UUID where
         Just uuid -> return uuid
         Nothing -> throwError $ printf "Could not convert %s to a UUID." s
 
+instance FromValue StrictByteString where
+  fromValue = parseBinary
+
+instance FromValue LazyByteString where
+  fromValue = parseBinaryLazy
+
 instance FromValue a => FromValue (Maybe a) where
   fromValue = permitNull fromValue
 
@@ -280,8 +299,14 @@ class FromRow a where
 instance (FromValue a, FromValue b) => FromRow (a, b) where
   fromRow = parseRow $ (,) <$> fromValue <*> fromValue
 
+instance (FromValue a, FromValue b, FromValue c) => FromRow (a, b, c) where
+  fromRow = parseRow $ (,,) <$> fromValue <*> fromValue <*> fromValue
+
 instance FromValue a => FromRow [a] where
   fromRow = parseRow parseList
+
+instance (FromValue a, Ord a) => FromRow (Set a) where
+  fromRow = Set.fromList <$> fromRow 
 
 type ParseResult a = Either IndexedException a
 
@@ -326,6 +351,12 @@ encodeText = encodeStringUnsafe . T.unpack
 encodeShow :: Show a => a -> Encoder 
 encodeShow = encodeStringUnsafe . show
 
+encodeBinary :: StrictByteString -> Encoder
+encodeBinary = encodeBuilder . byteString . B64.encode
+
+encodeBinaryLazy :: LazyByteString -> Encoder
+encodeBinaryLazy = encodeBuilder . lazyByteString . B64L.encode
+
 class ToValue a where
   toValue :: a -> Encoder
 
@@ -354,6 +385,12 @@ instance ToValue Bool where
 instance ToValue UUID where
   toValue = encodeStringUnsafe . UUID.toString
 
+instance ToValue StrictByteString where
+  toValue = encodeBinary
+
+instance ToValue LazyByteString where
+  toValue = encodeBinaryLazy
+
 instance ToValue a => ToValue (Maybe a) where
   toValue Nothing = encodeNull
   toValue (Just a) = toValue a
@@ -366,6 +403,20 @@ class ToRow a where
 
 instance (Foldable t, ToValue a) => ToRow (t a) where
   toRow = encodeRow . foldApp toValue
+
+data Encodable = forall a. ToValue a => Encodable !a
+
+e :: ToValue a => a -> Encodable
+e = Encodable
+
+instance ToValue Encodable where
+  toValue (Encodable a) = toValue a
+
+instance (ToValue a, ToValue b) => ToRow (a, b) where
+  toRow (a, b) = toRow [e a, e b] 
+
+instance (ToValue a, ToValue b, ToValue c) => ToRow (a, b, c) where
+  toRow (a, b, c) = toRow [e a, e b, e c] 
 
 encodeWith :: (Foldable t, ToRow a) => ParserConfig -> t a -> LazyByteString
 encodeWith config rows = toLazyByteString $ runReader (foldApp toRow rows) config
