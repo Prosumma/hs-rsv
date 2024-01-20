@@ -131,8 +131,7 @@ instance Alternative ValueParser where
       Right (a, newState, _) -> put newState >> return a
 
 decodeValue :: ParserState -> Either IndexedException (Maybe StrictByteString, ParserState)
-decodeValue state = first toStrictByteString <$>
-    decodeValue' (resetValueIndex state) mempty False
+decodeValue state = first toStrictByteString <$> decodeValue' (resetValueIndex state) mempty False
   where
     decodeValue' :: ParserState -> [Word8] -> Bool -> Either IndexedException ([Word8], ParserState)
     decodeValue' (ParserState [] indices) _ _ = throwError (indices, UnexpectedEOF)
