@@ -39,6 +39,7 @@ library
     , containers
     , data-default
     , mtl
+    , scientific
     , text
     , transformers
     , uuid
@@ -59,6 +60,7 @@ executable rsv-exe
     , data-default
     , mtl
     , rsv
+    , scientific
     , text
     , transformers
     , uuid
@@ -81,6 +83,7 @@ test-suite rsv-test
     , hspec
     , mtl
     , rsv
+    , scientific
     , text
     , transformers
     , uuid

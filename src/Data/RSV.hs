@@ -33,6 +33,7 @@ module Data.RSV (
   ParserException(..),
   ParserConfig(..),
   ParserIndices(..),
+  ParseResult,
   ParserState(..),
   RowParser,
   ToRow(..),
@@ -51,6 +52,7 @@ import Data.ByteString.Builder
 import Data.ByteString.Lazy (LazyByteString)
 import Data.ByteString (StrictByteString)
 import Data.Default
+import Data.Scientific
 import Data.Set (member, Set)
 import Data.Text (Text)
 import Data.UUID (UUID)
@@ -135,7 +137,7 @@ instance Alternative ValueParser where
 decodeValue :: ParserState -> Either IndexedException (Maybe StrictByteString, ParserState)
 decodeValue state = first toStrictByteString <$> decodeValue' (resetValueIndex state) mempty False
   where
-    decodeValue' :: ParserState -> [Word8] -> Bool -> Either IndexedException ([Word8], ParserState)
+    decodeValue' :: ParserState -> [Word8] -> Bool -> ParseResult ([Word8], ParserState)
     decodeValue' (ParserState [] indices) _ _ = throwError (indices, UnexpectedEOF)
     decodeValue' state@(ParserState (byte:remainingBytes) indices) accum hasNull
       | byte == rowTerminatorChar = throwError (indices, UnexpectedRowTerminator)
@@ -171,11 +173,11 @@ parseText = do
 parseString :: ValueParser String
 parseString = T.unpack <$> parseText
 
-parseRead :: Read a => ValueParser a
-parseRead = do
+parseRead :: Read a => String -> ValueParser a
+parseRead typename = do
   s <- parseString
   case readMaybe s of
-    Nothing -> throwIndexedException $ ConversionError $ printf "Could not convert string %s to desired type." s
+    Nothing -> throwIndexedException $ ConversionError $ printf "Could not convert string %s to desired type %s." s typename
     Just a -> return a
 
 parseList :: FromValue a => ValueParser [a]
@@ -210,13 +212,16 @@ instance FromValue Text where
   fromValue = parseText
 
 instance FromValue Int where
-  fromValue = parseRead
+  fromValue = parseRead "Int"
 
 instance FromValue Integer where
-  fromValue = parseRead
+  fromValue = parseRead "Integer"
 
 instance FromValue Double where
-  fromValue = parseRead
+  fromValue = parseRead "Double"
+
+instance FromValue Scientific where
+  fromValue = parseRead "Scientific"
 
 instance FromValue Bool where
   fromValue = do
@@ -278,7 +283,9 @@ instance (FromValue a, FromValue b) => FromRow (a, b) where
 instance FromValue a => FromRow [a] where
   fromRow = parseRow parseList
 
-parseWith :: FromRow a => ParserConfig -> LazyByteString -> Either IndexedException [a]
+type ParseResult a = Either IndexedException a
+
+parseWith :: FromRow a => ParserConfig -> LazyByteString -> ParseResult [a] 
 parseWith config lbs = fst <$> evalRWST (parse' fromRow) config (newParserState lbs)
   where
     parse' (RowParser parser) = do 
@@ -288,7 +295,7 @@ parseWith config lbs = fst <$> evalRWST (parse' fromRow) config (newParserState 
         else liftA2 (:) parser (parse' (RowParser parser))
     atEnd = gets $ null . remainingBytes
 
-parse :: FromRow a => LazyByteString -> Either IndexedException [a]
+parse :: FromRow a => LazyByteString -> ParseResult [a] 
 parse = parseWith def
 
 type Encoder = Reader ParserConfig Builder
@@ -335,6 +342,9 @@ instance ToValue Integer where
   toValue = encodeShow
 
 instance ToValue Double where
+  toValue = encodeShow
+
+instance ToValue Scientific where
   toValue = encodeShow
 
 instance ToValue Bool where
