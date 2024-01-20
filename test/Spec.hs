@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
 import Control.Applicative
-import Control.Monad.IO.Class
 import Data.Default
 import Data.RSV
 import Data.Text
@@ -66,7 +65,6 @@ main = hspec $ do
         Right _ -> expectationFailure "Hunh?"
     it "x's" $ do
       let xs = [[XInt 3, XText "foo"]]
-      liftIO $ print $ encode xs
       case roundtrip xs of
         Left e -> expectationFailure (show e)
         Right xs' -> xs' `shouldBe` xs
@@ -76,14 +74,12 @@ main = hspec $ do
               Person "Dave" "Gahan" (Just 1962),
               Person "Stephen" "Morrissey" (Just 1959)
             ] 
-      liftIO $ print $ encode people
       case roundtrip people of
         Left e -> expectationFailure (show e)
         Right people' -> people' `shouldBe` people
   describe "bool" $ do
     it "is configurable" $ do
-      let currentFalseValues = falseValues (def :: ParserConfig)
-      let config = def {falseValues=currentFalseValues<>Set.fromList ["gronk"],falseValue="gronk"}
+      let config = def {falseValues=defaultFalseValues<>Set.fromList ["gronk"],falseValue="gronk"}
       let bools = [[True, False, True]]
       case roundtripWith config bools of
         Left e -> expectationFailure (show e)

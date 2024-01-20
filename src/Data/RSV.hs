@@ -3,6 +3,8 @@
 module Data.RSV (
   convertValue,
   decodeValue,
+  defaultFalseValues,
+  defaultTrueValues,
   encode,
   encodeNull,
   encodeRow,
@@ -28,7 +30,7 @@ module Data.RSV (
   FromRow(..),
   FromValue(..),
   IndexedException,
-  ParseException(..),
+  ParserException(..),
   ParserConfig(..),
   ParserIndices(..),
   ParserState(..),
@@ -81,15 +83,6 @@ data ParserIndices = ParserIndices {
 advanceByteIndex :: ParserIndices -> ParserIndices
 advanceByteIndex (ParserIndices b v r) = ParserIndices (b + 1) v r
 
-rewindByteIndex :: ParserIndices -> ParserIndices
-rewindByteIndex (ParserIndices b v r) = ParserIndices (b - 1) v r
-
-resetValueIndex :: ParserIndices -> ParserIndices
-resetValueIndex (ParserIndices b _ r) = ParserIndices b b r
-
-resetRowIndex :: ParserIndices -> ParserIndices
-resetRowIndex (ParserIndices b _ _) = ParserIndices b b b
-
 data ParserState = ParserState {
   remainingBytes :: [Word8],
   parserIndices :: !ParserIndices
@@ -108,16 +101,22 @@ data ParserConfig = ParserConfig {
   falseValues :: !(Set Text)
 }
 
-instance Default ParserConfig where
-  def = ParserConfig "true" "false" (Set.fromList ["true", "t", "yes", "y", "1"]) (Set.fromList ["false", "f", "no", "n", "0"])
+defaultTrueValues :: Set Text
+defaultTrueValues = Set.fromList ["true", "t", "yes", "y", "1"]
 
-data ParseException = UnknownError | UnexpectedEOF | UnexpectedNull | UnexpectedRowTerminator | UnpermittedNull | UnicodeError | ConversionError String | MissingRowTerminator deriving (Eq, Show)
-type IndexedException = (ParserIndices, ParseException)
+defaultFalseValues :: Set Text
+defaultFalseValues = Set.fromList ["false", "f", "no", "n", "0"]
+
+instance Default ParserConfig where
+  def = ParserConfig "true" "false" defaultTrueValues defaultFalseValues 
+
+data ParserException = UnknownError | UnexpectedEOF | UnexpectedNull | UnexpectedRowTerminator | UnpermittedNull | UnicodeError | ConversionError String | MissingRowTerminator deriving (Eq, Show)
+type IndexedException = (ParserIndices, ParserException)
 
 newtype ValueParser a = ValueParser (RWST ParserConfig () ParserState (Either IndexedException) a)
   deriving (Functor, Applicative, Monad, MonadReader ParserConfig, MonadState ParserState, MonadError IndexedException)
 
-throwIndexedException :: (MonadState ParserState m, MonadError IndexedException m) => ParseException -> m a
+throwIndexedException :: (MonadState ParserState m, MonadError IndexedException m) => ParserException -> m a
 throwIndexedException e = do
   indices <- gets parserIndices
   throwError (indices, e)
@@ -132,8 +131,8 @@ instance Alternative ValueParser where
       Right (a, newState, _) -> put newState >> return a
 
 decodeValue :: ParserState -> Either IndexedException (Maybe StrictByteString, ParserState)
-decodeValue (ParserState bytes indices) = first toStrictByteString <$>
-    decodeValue' (ParserState bytes (resetValueIndex indices)) mempty False
+decodeValue state = first toStrictByteString <$>
+    decodeValue' (resetValueIndex state) mempty False
   where
     decodeValue' :: ParserState -> [Word8] -> Bool -> Either IndexedException ([Word8], ParserState)
     decodeValue' (ParserState [] indices) _ _ = throwError (indices, UnexpectedEOF)
@@ -148,6 +147,10 @@ decodeValue (ParserState bytes indices) = first toStrictByteString <$>
     toStrictByteString bytes
       | bytes == [nullChar] = Nothing
       | otherwise = Just $ SB.pack bytes
+    resetValueIndex :: ParserState -> ParserState
+    resetValueIndex (ParserState bytes (ParserIndices b _ r)) = ParserState bytes (ParserIndices b b r)
+    rewindByteIndex :: ParserIndices -> ParserIndices
+    rewindByteIndex (ParserIndices b v r) = ParserIndices (b - 1) v r
 
 parseValue :: ValueParser StrictByteString
 parseValue = do
@@ -241,17 +244,18 @@ instance Alternative RowParser where
 
 parseRow :: ValueParser a -> RowParser a
 parseRow (ValueParser parser) = do
-  config <- ask
-  state <- gets resetRow
-  case runRWST parser config state of
+  (config, state) <- askGet
+  case runRWST parser config (resetRow state) of
     Left e -> throwError e
     Right (result, newState, _) -> put newState >> finish result (remainingBytes newState)
   where
-    resetRow (ParserState bytes indices) = ParserState bytes (resetRowIndex indices)
     finish _ [] = throwIndexedException UnexpectedEOF
     finish a (byte:bytes)
       | byte == rowTerminatorChar = modify (advanceParserState bytes) >> return a
       | otherwise = throwIndexedException MissingRowTerminator
+    resetRow (ParserState bytes indices) = ParserState bytes (resetRowIndex indices)
+    resetRowIndex :: ParserIndices -> ParserIndices
+    resetRowIndex (ParserIndices b _ _) = ParserIndices b b b
 
 class FromRow a where
   fromRow :: RowParser a
@@ -313,6 +317,9 @@ instance ToValue String where
   toValue = encodeStringUnsafe
 
 instance ToValue Int where
+  toValue = encodeShow
+
+instance ToValue Integer where
   toValue = encodeShow
 
 instance ToValue Bool where
