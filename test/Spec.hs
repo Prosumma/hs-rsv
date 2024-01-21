@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
 import Control.Applicative
-import Control.Monad.IO.Class
 import Data.ByteString.Lazy (LazyByteString)
 import Data.Default
 import Data.List (intercalate)
