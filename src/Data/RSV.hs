@@ -329,6 +329,27 @@ instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e) => Fr
 instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f) => FromRow (a, b, c, d, e, f) where
   fromRow = parseRow $ (,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
 
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g) => FromRow (a, b, c, d, e, f, g) where
+  fromRow = parseRow $ (,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g, FromValue h) => FromRow (a, b, c, d, e, f, g, h) where
+  fromRow = parseRow $ (,,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g, FromValue h, FromValue i) => FromRow (a, b, c, d, e, f, g, h, i) where
+  fromRow = parseRow $ (,,,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue 
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g, FromValue h, FromValue i, FromValue j) => FromRow (a, b, c, d, e, f, g, h, i, j) where
+  fromRow = parseRow $ (,,,,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g, FromValue h, FromValue i, FromValue j, FromValue k) => FromRow (a, b, c, d, e, f, g, h, i, j, k) where
+  fromRow = parseRow $ (,,,,,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g, FromValue h, FromValue i, FromValue j, FromValue k, FromValue l) => FromRow (a, b, c, d, e, f, g, h, i, j, k, l) where
+  fromRow = parseRow $ (,,,,,,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f, FromValue g, FromValue h, FromValue i, FromValue j, FromValue k, FromValue l, FromValue m) => FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
+  fromRow = parseRow $ (,,,,,,,,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
 instance FromValue a => FromRow [a] where
   fromRow = parseRow parseList
 
@@ -461,6 +482,27 @@ instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValu
 
 instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f) => ToRow (a, b, c, d, e, f) where
   toRow (a, b, c, d, e, f) = toRow [en a, en b, en c, en d, en e, en f]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g) => ToRow (a, b, c, d, e, f, g) where
+  toRow (a, b, c, d, e, f, g) = toRow [en a, en b, en c, en d, en e, en f, en g]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g, ToValue h) => ToRow (a, b, c, d, e, f, g, h) where
+  toRow (a, b, c, d, e, f, g, h) = toRow [en a, en b, en c, en d, en e, en f, en g, en h]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g, ToValue h, ToValue i) => ToRow (a, b, c, d, e, f, g, h, i) where
+  toRow (a, b, c, d, e, f, g, h, i) = toRow [en a, en b, en c, en d, en e, en f, en g, en h, en i]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g, ToValue h, ToValue i, ToValue j) => ToRow (a, b, c, d, e, f, g, h, i, j) where
+  toRow (a, b, c, d, e, f, g, h, i, j) = toRow [en a, en b, en c, en d, en e, en f, en g, en h, en i, en j]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g, ToValue h, ToValue i, ToValue j, ToValue k) => ToRow (a, b, c, d, e, f, g, h, i, j, k) where
+  toRow (a, b, c, d, e, f, g, h, i, j, k) = toRow [en a, en b, en c, en d, en e, en f, en g, en h, en i, en j, en k]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g, ToValue h, ToValue i, ToValue j, ToValue k, ToValue l) => ToRow (a, b, c, d, e, f, g, h, i, j, k, l) where
+  toRow (a, b, c, d, e, f, g, h, i, j, k, l) = toRow [en a, en b, en c, en d, en e, en f, en g, en h, en i, en j, en k, en l]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f, ToValue g, ToValue h, ToValue i, ToValue j, ToValue k, ToValue l, ToValue m) => ToRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
+  toRow (a, b, c, d, e, f, g, h, i, j, k, l, m) = toRow [en a, en b, en c, en d, en e, en f, en g, en h, en i, en j, en k, en l, en m]
 
 encodeWith :: (Foldable t, ToRow a) => ParserConfig -> t a -> LazyByteString
 encodeWith config rows = toLazyByteString $ runReader (foldApp toRow rows) config
