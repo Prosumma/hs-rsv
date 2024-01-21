@@ -1,13 +1,17 @@
-{-# LANGUAGE ExistentialQuantification, FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, OverloadedStrings, TypeFamilies #-}
+{-# LANGUAGE ExistentialQuantification, FlexibleContexts, FlexibleInstances, GeneralisedNewtypeDeriving, OverloadedStrings, RecordWildCards, ScopedTypeVariables, TypeFamilies #-}
 
 module Data.RSV (
+  allTrueValues,
+  allFalseValues,
   convertValue,
   decodeValue,
   defaultFalseValues,
   defaultTrueValues,
+  en,
   encode,
   encodeBinary,
   encodeBinaryLazy,
+  encodeBool,
   encodeNull,
   encodeRow,
   encodeShow,
@@ -16,11 +20,13 @@ module Data.RSV (
   encodeValue,
   encodeWith,
   foldApp,
+  mappendA,
   newParserState,
   nullChar,
   parse,
   parseBinary,
   parseBinaryLazy,
+  parseBool,
   parseRead,
   parseRow,
   parseString,
@@ -112,11 +118,17 @@ data ParserConfig = ParserConfig {
   falseValues :: !(Set Text)
 }
 
+allTrueValues :: ParserConfig -> Set Text
+allTrueValues ParserConfig{..} = trueValues <> Set.fromList [trueValue] 
+
+allFalseValues :: ParserConfig -> Set Text
+allFalseValues ParserConfig{..} = falseValues <> Set.fromList [falseValue]
+ 
 defaultTrueValues :: Set Text
-defaultTrueValues = Set.fromList ["true", "t", "yes", "y", "1"]
+defaultTrueValues = Set.fromList ["t", "yes", "y", "1"]
 
 defaultFalseValues :: Set Text
-defaultFalseValues = Set.fromList ["false", "f", "no", "n", "0"]
+defaultFalseValues = Set.fromList ["f", "no", "n", "0"]
 
 instance Default ParserConfig where
   def = ParserConfig "true" "false" defaultTrueValues defaultFalseValues 
@@ -193,6 +205,19 @@ parseRead typename = do
     Nothing -> throwIndexedException $ ConversionError $ printf "Could not convert string %s to desired type %s." s typename
     Just a -> return a
 
+parseBool :: ValueParser Bool
+parseBool = do
+    config <- ask
+    parseText >>= convertValue (toBool config)
+    where
+      toBool :: ParserConfig -> Text -> Either String Bool
+      toBool config text
+        | lowerText `member` allTrueValues config = return True 
+        | lowerText `member` allFalseValues config = return False
+        | otherwise = throwError $ printf "Could not convert string %s to desired type Bool." (show text) 
+        where
+          lowerText = T.toLower text
+
 parseList :: FromValue a => ValueParser [a]
 parseList = do 
   done <- isAtRowTerminator
@@ -224,6 +249,9 @@ class FromValue a where
 instance FromValue Text where
   fromValue = parseText
 
+instance FromValue String where
+  fromValue = parseString
+
 instance FromValue Int where
   fromValue = parseRead "Int"
 
@@ -237,17 +265,7 @@ instance FromValue Scientific where
   fromValue = parseRead "Scientific"
 
 instance FromValue Bool where
-  fromValue = do
-    config <- ask
-    parseText >>= convertValue (toBool config)
-    where
-      toBool :: ParserConfig -> Text -> Either String Bool
-      toBool config text
-        | lowerText `member` trueValues config = return True 
-        | lowerText `member` falseValues config = return False
-        | otherwise = throwError $ printf "The value '%s' is not a valid value for Bool." (show text) 
-        where
-          lowerText = T.toLower text
+  fromValue = parseBool 
 
 instance FromValue UUID where
   fromValue = parseString >>= convertValue toUUID
@@ -302,6 +320,15 @@ instance (FromValue a, FromValue b) => FromRow (a, b) where
 instance (FromValue a, FromValue b, FromValue c) => FromRow (a, b, c) where
   fromRow = parseRow $ (,,) <$> fromValue <*> fromValue <*> fromValue
 
+instance (FromValue a, FromValue b, FromValue c, FromValue d) => FromRow (a, b, c, d) where
+  fromRow = parseRow $ (,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e) => FromRow (a, b, c, d, e) where
+  fromRow = parseRow $ (,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
+instance (FromValue a, FromValue b, FromValue c, FromValue d, FromValue e, FromValue f) => FromRow (a, b, c, d, e, f) where
+  fromRow = parseRow $ (,,,,,) <$> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue <*> fromValue
+
 instance FromValue a => FromRow [a] where
   fromRow = parseRow parseList
 
@@ -325,10 +352,15 @@ parse = parseWith def
 
 type Encoder = Reader ParserConfig Builder
 
+infixr 6 `mappendA`
+
+mappendA :: (Applicative f, Monoid m) => f m -> f m -> f m 
+mappendA = liftA2 (<>)
+
 infixr 6 <+>
 
 (<+>) :: (Applicative f, Monoid m) => f m -> f m -> f m 
-a <+> b = liftA2 (<>) a b
+a <+> b = mappendA a b 
 
 foldApp :: (Foldable t, Monoid m, Applicative f) => (a -> f m) -> t a -> f m
 foldApp f = foldr (\a accum -> f a <+> accum) (pure mempty)
@@ -350,6 +382,10 @@ encodeText = encodeStringUnsafe . T.unpack
 
 encodeShow :: Show a => a -> Encoder 
 encodeShow = encodeStringUnsafe . show
+
+encodeBool :: Bool -> Encoder
+encodeBool True = asks trueValue >>= encodeText 
+encodeBool False = asks falseValue >>= encodeText
 
 encodeBinary :: StrictByteString -> Encoder
 encodeBinary = encodeBuilder . byteString . B64.encode
@@ -379,8 +415,7 @@ instance ToValue Scientific where
   toValue = encodeShow
 
 instance ToValue Bool where
-  toValue True = asks trueValue >>= encodeText 
-  toValue False = asks falseValue >>= encodeText
+  toValue = encodeBool
 
 instance ToValue UUID where
   toValue = encodeStringUnsafe . UUID.toString
@@ -406,17 +441,26 @@ instance (Foldable t, ToValue a) => ToRow (t a) where
 
 data Encodable = forall a. ToValue a => Encodable !a
 
-e :: ToValue a => a -> Encodable
-e = Encodable
+en :: ToValue a => a -> Encodable
+en = Encodable
 
 instance ToValue Encodable where
   toValue (Encodable a) = toValue a
 
-instance (ToValue a, ToValue b) => ToRow (a, b) where
-  toRow (a, b) = toRow [e a, e b] 
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b) => ToRow (a, b) where
+  toRow (a, b) = toRow [en a, en b] 
 
-instance (ToValue a, ToValue b, ToValue c) => ToRow (a, b, c) where
-  toRow (a, b, c) = toRow [e a, e b, e c] 
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c) => ToRow (a, b, c) where
+  toRow (a, b, c) = toRow [en a, en b, en c] 
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d) => ToRow (a, b, c, d) where
+  toRow (a, b, c, d) = toRow [en a, en b, en c, en d]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e) => ToRow (a, b, c, d, e) where
+  toRow (a, b, c, d, e) = toRow [en a, en b, en c, en d, en e]
+
+instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValue e, ToValue f) => ToRow (a, b, c, d, e, f) where
+  toRow (a, b, c, d, e, f) = toRow [en a, en b, en c, en d, en e, en f]
 
 encodeWith :: (Foldable t, ToRow a) => ParserConfig -> t a -> LazyByteString
 encodeWith config rows = toLazyByteString $ runReader (foldApp toRow rows) config
