@@ -143,12 +143,7 @@ throwIndexedException e = do
 
 instance Alternative ValueParser where
   empty = throwIndexedException UnknownError
-  (ValueParser lhs) <|> (ValueParser rhs) = ValueParser $ do
-    (config, state) <- askGet
-    let result = runRWST lhs config state
-    case result of
-      Left _ -> rhs
-      Right (a, newState, _) -> put newState >> return a
+  lhs <|> rhs = catchError lhs (const rhs)
 
 decodeValue :: ParserState -> Either IndexedException (Maybe StrictByteString, ParserState)
 decodeValue state = first toStrictByteString <$> decodeValue' (resetValueIndex state) mempty False
@@ -286,12 +281,7 @@ newtype RowParser a = RowParser (RWST ParserConfig () ParserState (Either Indexe
 
 instance Alternative RowParser where
   empty = throwIndexedException UnknownError
-  (RowParser lhs) <|> (RowParser rhs) = RowParser $ do
-    (config, state) <- askGet
-    let result = runRWST lhs config state 
-    case result of
-      Left _ -> rhs
-      Right (a, newState, _) -> put newState >> return a
+  lhs <|> rhs = catchError lhs (const rhs)
 
 parseRow :: ValueParser a -> RowParser a
 parseRow (ValueParser parser) = do
