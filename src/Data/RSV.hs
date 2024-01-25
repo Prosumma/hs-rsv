@@ -36,9 +36,12 @@ module Data.RSV (
   parseWith,
   permitNull,
   rowTerminatorChar,
+  runEncoder,
   throwIndexedException,
   valueTerminatorChar,
   Encodable(..),
+  Encoder,
+  EncoderContext(..),
   FromRow(..),
   FromValue(..),
   IndexedException,
@@ -359,23 +362,38 @@ parseWith config lbs = fst <$> evalRWST (parse' fromRow) config (newParserState 
 parse :: FromRow a => LazyByteString -> ParseResult [a] 
 parse = parseWith def
 
-type Encoder = Reader ParserConfig Builder
+newtype EncoderContext a = EncoderContext (Reader ParserConfig a)
+    deriving (Functor, Applicative, Monad, MonadReader ParserConfig)
+
+runEncoder :: EncoderContext a -> ParserConfig -> a
+runEncoder (EncoderContext reader) = runReader reader
+
+instance Semigroup m => Semigroup (EncoderContext m) where
+  a <> b = liftA2 (<>) a b
+
+instance Monoid m => Monoid (EncoderContext m) where
+  mempty = EncoderContext $ return mempty 
+
+type Encoder = EncoderContext Builder 
 
 infixr 6 `mappendA`
 
+{-# DEPRECATED mappendA "Use the Monoid instance of Encoder instead." #-}
 mappendA :: (Applicative f, Monoid m) => f m -> f m -> f m 
 mappendA = liftA2 (<>)
 
 infixr 6 <+>
 
+{-# DEPRECATED (<+>) "Use the Monoid instance of Encoder instead." #-}
 (<+>) :: (Applicative f, Monoid m) => f m -> f m -> f m 
 a <+> b = mappendA a b 
 
+{-# DEPRECATED foldApp "Use the Monoid instance of Encoder instead." #-}
 foldApp :: (Foldable t, Monoid m, Applicative f) => (a -> f m) -> t a -> f m
 foldApp f = foldr (\a accum -> f a <+> accum) (pure mempty)
 
 encodeValue :: Encoder -> Encoder 
-encodeValue encoder = encoder <+> pure (word8 valueTerminatorChar)
+encodeValue encoder = encoder <> pure (word8 valueTerminatorChar)
 
 encodeBuilder :: Builder -> Encoder
 encodeBuilder = encodeValue . pure
@@ -440,13 +458,13 @@ instance ToValue a => ToValue (Maybe a) where
   toValue (Just a) = toValue a
 
 encodeRow :: Encoder -> Encoder
-encodeRow = (<+> pure (word8 rowTerminatorChar))
+encodeRow = (<> pure (word8 rowTerminatorChar))
 
 class ToRow a where
   toRow :: a -> Encoder
 
 instance (Foldable t, ToValue a) => ToRow (t a) where
-  toRow = encodeRow . foldApp toValue
+  toRow = encodeRow . foldMap toValue
 
 data Encodable = forall a. ToValue a => Encodable !a
 
@@ -493,7 +511,7 @@ instance {-# OVERLAPPING #-} (ToValue a, ToValue b, ToValue c, ToValue d, ToValu
   toRow (a, b, c, d, e, f, g, h, i, j, k, l, m) = toRow [en a, en b, en c, en d, en e, en f, en g, en h, en i, en j, en k, en l, en m]
 
 encodeWith :: (Foldable t, ToRow a) => ParserConfig -> t a -> LazyByteString
-encodeWith config rows = toLazyByteString $ runReader (foldApp toRow rows) config
+encodeWith config rows = toLazyByteString $ runEncoder (foldMap toRow rows) config
 
 encode :: (Foldable t, ToRow a) => t a -> LazyByteString
 encode = encodeWith def

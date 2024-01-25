@@ -28,7 +28,7 @@ data Person = Person {
 } deriving (Eq, Show)
 
 instance ToRow Person where
-  toRow Person{..} = encodeRow $ toValue id <+> toValue name <+> toValue birthYear
+  toRow Person{..} = encodeRow $ toValue id <> toValue name <> toValue birthYear
 
 instance FromRow Person where
   fromRow = parseRow $ Person <$> fromValue <*> fromValue <*> fromValue
@@ -102,7 +102,7 @@ main = hspec $ do
       case parse lbs :: ParseResult [[Bool]] of
         Left (indices, ConversionError "Could not convert string \"z\" to desired type Bool.") -> indices `shouldBe` ParserIndices 2 0 0
         Left e -> expectationFailure (show e)
-        _ -> expectationFailure ""
+        _ -> expectationFailure "Expected to throw a ConversionError but it succeeded."
     it "supports Alternative when parsing" $ do
       let input = [XInt 3, XText "three"]
       case roundtrip input of
