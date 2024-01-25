@@ -20,8 +20,6 @@ module Data.RSV (
   encodeText,
   encodeValue,
   encodeWith,
-  foldApp,
-  mappendA,
   newParserState,
   nullChar,
   parse,
@@ -45,23 +43,21 @@ module Data.RSV (
   FromRow(..),
   FromValue(..),
   IndexedException,
+  Parser,
   ParserException(..),
   ParserConfig(..),
   ParserIndices(..),
   ParseResult,
   ParserState(..),
-  RowParser,
   ToRow(..),
-  ToValue(..),
-  ValueParser,
-  (<+>)
+  ToValue(..)
 ) where
 
 import Control.Applicative
 import Control.Monad.Error.Class
 import Control.Monad.Reader (asks, runReader, MonadReader(..), Reader)
 import Control.Monad.State (gets, modify, MonadState(..))
-import Control.Monad.Trans.RWS (evalRWST, runRWST, RWST)
+import Control.Monad.Trans.RWS (evalRWST, RWST)
 import Data.Bifunctor
 import Data.ByteString.Builder
 import Data.ByteString.Lazy (LazyByteString)
@@ -137,17 +133,17 @@ type IndexedException = (ParserIndices, ParserException)
 conversionError :: String
 conversionError = "Could not convert string %s to desired type %s."
 
-newtype ValueParser a = ValueParser (RWST ParserConfig () ParserState (Either IndexedException) a)
+newtype Parser a = Parser (RWST ParserConfig () ParserState (Either IndexedException) a)
   deriving (Functor, Applicative, Monad, MonadReader ParserConfig, MonadState ParserState, MonadError IndexedException)
+
+instance Alternative Parser where
+  empty = throwIndexedException UnknownError
+  lhs <|> rhs = catchError lhs (const rhs)
 
 throwIndexedException :: (MonadState ParserState m, MonadError IndexedException m) => ParserException -> m a
 throwIndexedException e = do
   indices <- gets parserIndices
   throwError (indices, e)
-
-instance Alternative ValueParser where
-  empty = throwIndexedException UnknownError
-  lhs <|> rhs = catchError lhs (const rhs)
 
 decodeValue :: ParserState -> Either IndexedException (Maybe StrictByteString, ParserState)
 decodeValue state = first toStrictByteString <$> decodeValue' (resetValueIndex state) mempty False
@@ -170,7 +166,7 @@ decodeValue state = first toStrictByteString <$> decodeValue' (resetValueIndex s
     rewindByteIndex :: ParserIndices -> ParserIndices
     rewindByteIndex (ParserIndices b v r) = ParserIndices (b - 1) v r
 
-parseValue :: ValueParser StrictByteString
+parseValue :: Parser StrictByteString
 parseValue = do
   result <- gets decodeValue
   case result of
@@ -178,30 +174,30 @@ parseValue = do
     Right (Nothing, newState) -> put newState >> throwIndexedException UnpermittedNull
     Right (Just bs, newState) -> put newState >> return bs
 
-parseText :: ValueParser Text
+parseText :: Parser Text
 parseText = do
   sbs <- parseValue
   case TE.decodeUtf8' sbs of
     Left _ -> throwIndexedException UnicodeError
     Right t -> return t
 
-parseString :: ValueParser String
+parseString :: Parser String
 parseString = T.unpack <$> parseText
 
-parseBinary :: ValueParser StrictByteString
+parseBinary :: Parser StrictByteString
 parseBinary = parseValue >>= convertValue B64.decode
 
-parseBinaryLazy :: ValueParser LazyByteString
+parseBinaryLazy :: Parser LazyByteString
 parseBinaryLazy = LB.fromStrict <$> parseBinary
 
-parseRead :: Read a => String -> ValueParser a
+parseRead :: Read a => String -> Parser a
 parseRead typename = do
   s <- parseString
   case readMaybe s of
     Nothing -> throwIndexedException $ ConversionError $ printf conversionError s typename
     Just a -> return a
 
-parseBool :: ValueParser Bool
+parseBool :: Parser Bool
 parseBool = do
     config <- ask
     parseText >>= convertValue (toBool config)
@@ -214,7 +210,7 @@ parseBool = do
         where
           lowerText = T.toLower text
 
-parseList :: FromValue a => ValueParser [a]
+parseList :: FromValue a => Parser [a]
 parseList = do 
   done <- isAtRowTerminator
   if done
@@ -227,12 +223,12 @@ parseList = do
       | byte == rowTerminatorChar = return True
       | otherwise = return False
 
-convertValue :: (v -> Either String a) -> v -> ValueParser a
+convertValue :: (v -> Either String a) -> v -> Parser a
 convertValue convert value = case convert value of
   Left error -> throwIndexedException (ConversionError error)
   Right a -> return a
 
-permitNull :: ValueParser a -> ValueParser (Maybe a)
+permitNull :: Parser a -> Parser (Maybe a)
 permitNull parser = catchError (Just <$> parser) handleError
   where
     handleError (_, UnpermittedNull) = modify advanceBy2 >> return Nothing
@@ -240,7 +236,7 @@ permitNull parser = catchError (Just <$> parser) handleError
     advanceBy2 (ParserState bytes (ParserIndices b v r)) = ParserState (drop 2 bytes) (ParserIndices (b + 2) v r)
 
 class FromValue a where
-  fromValue :: ValueParser a
+  fromValue :: Parser a
 
 instance FromValue Text where
   fromValue = parseText
@@ -280,30 +276,24 @@ instance FromValue LazyByteString where
 instance FromValue a => FromValue (Maybe a) where
   fromValue = permitNull fromValue
 
-newtype RowParser a = RowParser (RWST ParserConfig () ParserState (Either IndexedException) a)
-  deriving (Functor, Applicative, Monad, MonadReader ParserConfig, MonadState ParserState, MonadError IndexedException)
-
-instance Alternative RowParser where
-  empty = throwIndexedException UnknownError
-  lhs <|> rhs = catchError lhs (const rhs)
-
-parseRow :: ValueParser a -> RowParser a
-parseRow (ValueParser parser) = do
-  (config, state) <- liftA2 (,) ask get 
-  case runRWST parser config (resetRow state) of
-    Left e -> throwError e
-    Right (result, newState, _) -> put newState >> finish result (remainingBytes newState)
+parseRow :: Parser a -> Parser a
+parseRow valueParser = do
+  modify resetRow
+  a <- valueParser
+  finish
+  return a
   where
-    finish _ [] = throwIndexedException UnexpectedEOF
-    finish a (byte:bytes)
-      | byte == rowTerminatorChar = modify (advanceParserState bytes) >> return a
+    finish' [] = throwIndexedException UnexpectedEOF
+    finish' (b:bytes)
+      | b == rowTerminatorChar = modify (advanceParserState bytes)
       | otherwise = throwIndexedException MissingRowTerminator
+    finish = gets remainingBytes >>= finish'
     resetRow (ParserState bytes indices) = ParserState bytes (resetRowIndex indices)
     resetRowIndex :: ParserIndices -> ParserIndices
     resetRowIndex (ParserIndices b _ _) = ParserIndices b b b
 
 class FromRow a where
-  fromRow :: RowParser a
+  fromRow :: Parser a
 
 instance (FromValue a, FromValue b) => FromRow (a, b) where
   fromRow = parseRow $ (,) <$> fromValue <*> fromValue
@@ -352,11 +342,11 @@ type ParseResult a = Either IndexedException a
 parseWith :: FromRow a => ParserConfig -> LazyByteString -> ParseResult [a] 
 parseWith config lbs = fst <$> evalRWST (parse' fromRow) config (newParserState lbs)
   where
-    parse' (RowParser parser) = do 
+    parse' (Parser parser) = do 
       isAtEnd <- atEnd
       if isAtEnd
         then return []
-        else liftA2 (:) parser (parse' (RowParser parser))
+        else liftA2 (:) parser (parse' (Parser parser))
     atEnd = gets $ null . remainingBytes
 
 parse :: FromRow a => LazyByteString -> ParseResult [a] 
@@ -375,22 +365,6 @@ instance Monoid m => Monoid (EncoderContext m) where
   mempty = EncoderContext $ return mempty 
 
 type Encoder = EncoderContext Builder 
-
-infixr 6 `mappendA`
-
-{-# DEPRECATED mappendA "Use the Monoid instance of Encoder instead." #-}
-mappendA :: (Applicative f, Monoid m) => f m -> f m -> f m 
-mappendA = liftA2 (<>)
-
-infixr 6 <+>
-
-{-# DEPRECATED (<+>) "Use the Monoid instance of Encoder instead." #-}
-(<+>) :: (Applicative f, Monoid m) => f m -> f m -> f m 
-a <+> b = mappendA a b 
-
-{-# DEPRECATED foldApp "Use the Monoid instance of Encoder instead." #-}
-foldApp :: (Foldable t, Monoid m, Applicative f) => (a -> f m) -> t a -> f m
-foldApp f = foldr (\a accum -> f a <+> accum) (pure mempty)
 
 encodeValue :: Encoder -> Encoder 
 encodeValue encoder = encoder <> pure (word8 valueTerminatorChar)
