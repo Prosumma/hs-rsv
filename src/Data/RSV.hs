@@ -4,6 +4,7 @@ module Data.RSV (
   allTrueValues,
   allFalseValues,
   convertValue,
+  conversionError,
   decodeValue,
   defaultFalseValues,
   defaultTrueValues,
@@ -80,9 +81,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.UUID as UUID
 
-askGet :: (MonadReader env m, MonadState state m) => m (env, state)
-askGet = liftA2 (,) ask get
-
 valueTerminatorChar, nullChar, rowTerminatorChar :: Word8
 valueTerminatorChar = 0xFF
 nullChar = 0xFE
@@ -132,6 +130,9 @@ instance Default ParserConfig where
 
 data ParserException = UnknownError | UnexpectedEOF | UnexpectedNull | UnexpectedRowTerminator | UnpermittedNull | UnicodeError | ConversionError String | MissingRowTerminator deriving (Eq, Show)
 type IndexedException = (ParserIndices, ParserException)
+
+conversionError :: String
+conversionError = "Could not convert string %s to desired type %s."
 
 newtype ValueParser a = ValueParser (RWST ParserConfig () ParserState (Either IndexedException) a)
   deriving (Functor, Applicative, Monad, MonadReader ParserConfig, MonadState ParserState, MonadError IndexedException)
@@ -194,7 +195,7 @@ parseRead :: Read a => String -> ValueParser a
 parseRead typename = do
   s <- parseString
   case readMaybe s of
-    Nothing -> throwIndexedException $ ConversionError $ printf "Could not convert string %s to desired type %s." s typename
+    Nothing -> throwIndexedException $ ConversionError $ printf conversionError s typename
     Just a -> return a
 
 parseBool :: ValueParser Bool
@@ -206,7 +207,7 @@ parseBool = do
       toBool config text
         | lowerText `member` allTrueValues config = return True 
         | lowerText `member` allFalseValues config = return False
-        | otherwise = throwError $ printf "Could not convert string %s to desired type Bool." (show text) 
+        | otherwise = throwError $ printf conversionError (show text) ("Bool" :: String)
         where
           lowerText = T.toLower text
 
@@ -285,7 +286,7 @@ instance Alternative RowParser where
 
 parseRow :: ValueParser a -> RowParser a
 parseRow (ValueParser parser) = do
-  (config, state) <- askGet
+  (config, state) <- liftA2 (,) ask get 
   case runRWST parser config (resetRow state) of
     Left e -> throwError e
     Right (result, newState, _) -> put newState >> finish result (remainingBytes newState)
