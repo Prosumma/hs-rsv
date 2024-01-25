@@ -277,7 +277,7 @@ instance FromValue a => FromValue (Maybe a) where
   fromValue = permitNull fromValue
 
 parseRow :: Parser a -> Parser a
-parseRow valueParser = modify resetRow >> (valueParser <* finish)
+parseRow valueParser = modify resetRow >> valueParser <* finish
   where
     finish' [] = throwIndexedException UnexpectedEOF
     finish' (b:bytes)
