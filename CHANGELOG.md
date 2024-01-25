@@ -8,4 +8,17 @@ and this project adheres to the
 
 ## Unreleased
 
-## 0.1.0.0 - YYYY-MM-DD
+## 1.2.1.0 - 2024-01-25
+
+### Added
+
+- Added `EncoderContext` newtype wrapper around `Reader ParserConfig`.
+
+### Changed
+
+- `Encoder` is now `EncoderContext Builder` instead of `Reader ParserConfig Builder` (but it's just a newtype wrapper).
+- `ValueParser` and `RowParser` are now just `Parser`.
+
+### Removed
+
+- `mappendA`, `foldApp` and `<+>` have been removed in favor of the Monoid instance of `EncoderContext`.
