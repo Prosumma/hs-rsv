@@ -163,19 +163,15 @@ next = do
     (byte:_) -> return byte
 
 value :: Parser [Word8]
-value = parseValue $ null' <|> value' 
+value = parseValue $ value' False 
   where
-    null' = do
+    value' consumed = do
       n <- next
-      case toMarker n of
-        Just NullMarker -> advance >> return [n]
-        _ -> throwIndexedException $ Expected NullMarker
-    value' = do 
-      n <- next
-      case toMarker n of
-        Nothing -> advance >> (n :) <$> value'
-        Just ValueMarker -> return []
-        Just marker -> throwIndexedException $ Unexpected marker
+      case (toMarker n, consumed) of
+        (Nothing, _) -> advance >> (n :) <$> value' True
+        (Just NullMarker, False) -> advance >> return [n]
+        (Just ValueMarker, _) -> return []
+        (Just marker, _) -> throwIndexedException $ Unexpected marker
     parseValue parser = do
       resetValueIndex
       a <- parser
