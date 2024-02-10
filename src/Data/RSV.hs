@@ -169,8 +169,8 @@ value = parseValue $ value' False
       n <- next
       case (toMarker n, consumed) of
         (Nothing, _) -> advance >> (n :) <$> value' True
-        (Just NullMarker, False) -> advance >> return [n]
         (Just ValueMarker, _) -> return []
+        (Just NullMarker, False) -> advance >> return [n]
         (Just marker, _) -> throwIndexedException $ Unexpected marker
     parseValue parser = do
       resetValueIndex
