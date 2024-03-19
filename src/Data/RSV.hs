@@ -83,7 +83,17 @@ valueTerminatorChar = 0xFF
 nullChar = 0xFE
 rowTerminatorChar = 0xFD
 
+-- | The current locations of parsing.
+--
+-- The first element of the tuple is the byte index of the next byte to be processed.
+-- The second element is the byte index of the start of the current value being parsed. It is *not* the index of said value. 
+-- The third element is the byte index of the start of the current row being parsed. It is *not* the index of said row.
+--
+-- Why three indices? It's not terribly difficult to just have one, but three indices can be a little more helpful
+-- when some errors are byte-focused, others value-focused, others row-focused. For instance, if an error is thrown because
+-- a value cannot be converted properly, the byte index of the current value is most likely the only one that matters.
 type ParserIndices = (Integer, Integer, Integer)
+
 type ParserState = (ParserIndices, [Word8])
 
 data ParserConfig = ParserConfig {
@@ -155,6 +165,7 @@ consume n = do
 advance :: Parser ()
 advance = consume 1
 
+-- | Gets the next byte but does not advance.
 next :: Parser Word8
 next = do
   bytes <- gets snd
@@ -210,6 +221,7 @@ parseBool :: Parser Bool
 parseBool = do 
   config <- ask
   t <- parseText
+  -- True overrides False.
   case (t `member` allTrueValues config, t `member` allFalseValues config) of
     (True, _) -> return True
     (_, True) -> return False
